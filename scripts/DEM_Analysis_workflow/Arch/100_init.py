@@ -17,6 +17,15 @@ model: BlockModel = BlockModel.from_template(template)
 # =============================================================================
 model.compute_contacts()
 
+# =============================================================================
+# Flag supports
+# =============================================================================
+# Supports belong to the model, not to the problem: the solvers read
+# block.is_support directly off the model.
+
+for element in model.elements():
+    if model.graph.degree(element.graphnode) == 1:
+        element.is_support = True
 
 # =============================================================================
 # Add material and assign to blocks

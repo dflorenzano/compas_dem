@@ -1,86 +1,79 @@
+"""Read back everything the BC demo wrote, from the single analysis file.
+
+Run ``DEM_Boundary_Conditions_Demo.py`` first to produce ``dem_arch_analysis.json``.
+"""
+
 import pathlib
 
 import compas
 from compas_dem.analysis.resolve import resolve_centroidal_displacements
 from compas_dem.analysis.resolve import resolve_centroidal_loads
-from compas_dem.models import BlockModel
-from compas_dem.problem import BoundaryCondition
-from compas_dem.problem import Problem
-from compas_dem.problem import Results
+from compas_dem.models import Analysis
+from compas_dem.problem import Displacement
+from compas_dem.problem import Load
 
-FILE = pathlib.Path(__file__).parent / "dem_arch.json"
-problem: Problem = compas.json_load(FILE)
-model: BlockModel = compas.json_load(pathlib.Path(__file__).parent / "dem_arch_model.json")
-results: Results = compas.json_load(pathlib.Path(__file__).parent / "dem_arch_result.json")
+RULE = "----------------------------------------------------------------"
 
-for edge in results.edges():
-    trans = results.transformation(edge[0])
-    print(f"Edge: {edge}")
-    print(f"Transformation: {trans}")
-    print(f"Contact Polygon: {results.contact_polygon(edge)}")
-    print(f"Contact Force Vector: {results.resultant_global(edge)}")
-    break
+# One file carries the model, its problems and their results, and the problems
+# come back already bound to the model.
+analysis: Analysis = compas.json_load(pathlib.Path(__file__).parent / "dem_arch_analysis.json")
+model = analysis.model
 
-boundary_conditions = problem.boundary_conditions
-boundary_condition_gravity: BoundaryCondition = boundary_conditions[0]
-boundary_condition_displacement: BoundaryCondition = boundary_conditions[1]
-boundary_condition_surface_load: BoundaryCondition = boundary_conditions[2]
-boundary_condition_point_load: BoundaryCondition = boundary_conditions[3]
+loaded = next(p for p in analysis.problems if p.name == "Loads and settlement")
+self_weight = next(p for p in analysis.problems if p.name == "Self-weight")
 
-print("----------------------------------------------------------------")
-print("\n")
+print(f"Analysis: {analysis.name} - Model: {model.guid} - {len(analysis.problems)} problems")
+print(RULE)
 
-print(f"Problem: {problem.guid} – Model: {model.guid} – {len(problem.boundary_conditions)} Boundary Conditions")
-print("\n")
-print("----------------------------------------------------------------")
-print("\n")
+for problem in analysis.problems:
+    results = analysis.results_for(problem)
+    status = "solved" if results else "not solved"
+    print(f"Problem '{problem.name}' ({problem.guid}): {len(problem.boundary_conditions)} boundary conditions, {status}")
 
-print("Boundary Conditions:")
-print(f"Boundary Condition 1: {boundary_conditions[0].name}")
-print(f"Boundary Condition 2: {boundary_conditions[1].name}")
-print(f"Boundary Condition 3: {boundary_conditions[2].name}")
-print(f"Boundary Condition 4: {boundary_conditions[3].name}")
+print(RULE)
 
-print("\n")
-print("----------------------------------------------------------------")
-print("\n")
+# Boundary conditions are typed objects, so they can be filtered by what they are
+# rather than by which named bucket they happened to be put in.
+print(f"Loads on '{loaded.name}':")
+for bc in loaded.loads:
+    print(f"  {bc!r}  [{bc.loading_type}]")
 
+print(f"Prescribed movements on '{loaded.name}':")
+for bc in loaded.displacements:
+    print(f"  {bc!r}")
 
-print(f"Boundary Condition 1 Gravity: {boundary_condition_gravity.g}")
-print(f"Boundary Condition 2 Displacements: {boundary_condition_displacement.displacements}")
-print(f"Boundary Condition 3 Surface Loads: {boundary_condition_surface_load.surface_loads}")
-print(f"Boundary Condition 4 Point Loads: {boundary_condition_point_load.point_loads}")
+print(f"'{self_weight.name}' carries {len(self_weight.boundary_conditions)} boundary conditions - self-weight is applied by the solver, not registered.")
+print(RULE)
 
-print("\n")
-print("----------------------------------------------------------------")
-print("\n")
+# The branch of the hierarchy is what decides how a boundary condition resolves.
+assert all(isinstance(bc, Load) for bc in loaded.loads)
+assert all(isinstance(bc, Displacement) for bc in loaded.displacements)
 
+contact_properties = loaded.contact_properties
+print("Contact properties:")
+print(f"  Contact model phi: {contact_properties.contact_model.phi}")
+print(f"  Contact model c:   {contact_properties.contact_model.c}")
+print(f"  Joint model:       kn = {contact_properties.joint_model.kn}, kt = {contact_properties.joint_model.kt}")
+print(RULE)
 
-contact_properties = problem.contact_properties
-print("Contact Properties:")
-print(f"Contact Model with Phi: {contact_properties.contact_model.phi}")
-print(f"Contact Model with C: {contact_properties.contact_model.c}")
-print(f"Joint Model: Kn = {contact_properties.joint_model.kn}, Kt = {contact_properties.joint_model.kt}")
+print("Supports are set on the model, not on the problem:")
+print(f"  {[block.graphnode for block in model.supports()]}")
+print(RULE)
 
+# Both resolvers take the whole boundary condition list and ignore what is not
+# theirs, so there is nothing to pre-filter.
+print("Centroidal loads (block 10):")
+print(f"  {resolve_centroidal_loads(model, loaded.boundary_conditions)[10]}")
 
-print("\n")
-print("----------------------------------------------------------------")
-print("\n")
+print("Centroidal displacements (block 0):")
+print(f"  {resolve_centroidal_displacements(loaded.boundary_conditions)[0]}")
+print(RULE)
 
-print("Supports set on the model")
-print(f"Supports: {[block.graphnode for block in model.supports()]}")
-
-print("\n")
-print("----------------------------------------------------------------")
-print("\n")
-
-print("Centroidal Loads for Boundary Condition 3 (Surface Loads):")
-print(resolve_centroidal_loads(model, boundary_condition_surface_load))
-
-# Returns a dictionary of centroidal loads for each block in the model, based on the specified boundary condition.
-
-
-print("Centroidal Loads for Boundary Condition 2 (Settlement):")
-print(resolve_centroidal_displacements(boundary_condition_displacement))
-
-# Returns a dictionary of centroidal displacements for each block in the model, based on the specified boundary condition.
+results = analysis.results_for(self_weight)
+if results:
+    for edge in results.edges():
+        print(f"Edge: {edge}")
+        print(f"  Transformation:  {results.transformation(edge[0])}")
+        print(f"  Contact polygon: {results.contact_polygon(edge)}")
+        print(f"  Contact force:   {results.resultant_global(edge)}")
+        break

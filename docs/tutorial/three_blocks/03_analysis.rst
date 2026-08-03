@@ -14,10 +14,12 @@ off to a solver. ``compas_dem`` ships with bindings for three engines:
 All reachable through the same :class:`~compas_dem.problem.Solver` API.
 
 
-Load the problem
-================
+Load the analysis
+=================
 
-We start by deserialising the problem from the previous page.
+We start by deserialising the analysis from the previous page. Because the
+analysis holds the model and the problem together, the problem comes back
+already bound to its model — there is nothing to re-link by hand.
 
 .. code-block:: python
 
@@ -25,67 +27,70 @@ We start by deserialising the problem from the previous page.
     import compas
 
     HERE = os.path.dirname(__file__)
-    problem = compas.json_load(os.path.join(HERE, "DEM_problem.json"))
+    analysis = compas.json_load(os.path.join(HERE, "DEM_analysis.json"))
+    problem = analysis.problems[0]
 
 
 Solve with LMGC90
 =================
 
 LMGC90 runs a discrete element simulation through ``n_steps`` time
-increments of size ``dt``. Calling :meth:`~compas_dem.problem.Problem.solve`
-with the configured solver writes the results back onto ``problem.model``
-in place — block transformations on the graph nodes, contact forces on the
-graph edges.
+increments of size ``dt``. Set the solver on the problem, then call
+:meth:`~compas_dem.problem.Problem.solve`, which takes no arguments because
+the model comes from the problem itself.
 
 .. code-block:: python
 
     from compas_dem.problem import Solver
 
-    lmgc90 = Solver.LMGC90(n_steps=100, dt=0.001)
-    problem.solve(lmgc90)
+    problem.set_solver(Solver.LMGC90(n_steps=100, dt=0.001))
+    results = problem.solve()
 
-    compas.json_dump(problem, os.path.join(HERE, "DEM_results.json"))
+    compas.json_dump(analysis, os.path.join(HERE, "DEM_analysis.json"))
+
+Solving a problem that belongs to an analysis records its results on that
+analysis, so dumping the analysis persists the model, the problem and the
+results as one object.
 
 
 Solve with CRA
 ==============
 
 For a static limit-state check, the CRA solver is a better fit. It uses a
-penalty formulation to compute admissible contact forces under self-weight
-and applied loads. The interface is identical, only the solver
-configuration was swapped.
+penalty formulation to compute admissible contact forces under self-weight.
+The interface is identical, only the solver configuration was swapped.
 
 .. code-block:: python
 
-    cra = Solver.CRA(verbose=True)
-    problem.solve(cra)
-
-    compas.json_dump(problem, os.path.join(HERE, "DEM_results.json"))
+    problem.set_solver(Solver.CRA(verbose=True))
+    results = problem.solve()
 
 .. note::
 
-   Both solvers serialise their results to the same JSON file. Run the
-   solver of interest, then move on to the visualisation step below.
+   CRA and RBE resolve self-weight against contact forces and have no
+   mechanism for applied loads or prescribed movements. Rather than dropping
+   them silently, they refuse a problem that carries any. Solve those with
+   LMGC90, PRD or BLA instead. This problem is self-weight alone, so either
+   family works.
 
 
 Inspect the results
 ===================
 
-The solver writes per-block transformations on the model graph's nodes and
-per-contact forces on its edges. We can iterate through them directly.
+:class:`~compas_dem.problem.Results` is a standalone object, keyed by block
+index and contact edge, serialisable on its own. It is never written back
+into the model.
 
 .. code-block:: python
 
-    problem = compas.json_load(os.path.join(HERE, "DEM_results.json"))
+    results = analysis.results_for(problem)
 
-    graph = problem.model.graph
+    for node in results.nodes():
+        block_transformation = results.transformation(node)
 
-    for node in graph.nodes():
-        block_transformation = graph.node_attribute(node, "transformation")
-
-    for edge in graph.edges():
-        gap = graph.edge_attribute(edge, "gap")
-        magnitude = graph.edge_attribute(edge, "force_magnitude")
+    for edge in results.edges():
+        gap = results.gap(edge)
+        magnitude = results.force_magnitude(edge)
         print(f"Edge {edge} gap: {gap}, force magnitude: {magnitude}")
 
 
@@ -100,8 +105,8 @@ amplifies the displacements so they are visible in static configurations.
 
     from compas_dem.viewer import DEMViewer
 
-    viewer = DEMViewer(problem.model)
-    viewer.add_solution(scale=0.5)
+    viewer = DEMViewer(analysis.model)
+    viewer.add_solution(results, scale=0.5)
     viewer.show()
 
 

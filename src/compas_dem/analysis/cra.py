@@ -196,6 +196,29 @@ def _resolve_mu(problem: Problem, mu: Optional[float]) -> float:
         raise ValueError("No friction coefficient provided and no contact model in the problem.")
 
 
+def _reject_unsupported_boundary_conditions(problem: Problem) -> None:
+    """Refuse to solve a problem carrying boundary conditions CRA/RBE cannot apply.
+
+    CRA and RBE are limited-equilibrium solvers: they resolve self-weight against
+    contact forces and have no mechanism for applied loads or prescribed movements.
+    Silently dropping them would return a plausible-looking result for a different
+    problem than the one that was set up, so refuse instead.
+
+    Raises
+    ------
+    ValueError
+        If any boundary condition is registered on the problem.
+    """
+    if not problem.boundary_conditions:
+        return
+    kinds = sorted({type(bc).__name__ for bc in problem.boundary_conditions})
+    raise ValueError(
+        f"The CRA and RBE solvers apply self-weight only, and cannot apply the boundary conditions on this problem ({', '.join(kinds)}). "
+        "Solve this problem with Solver.LMGC90(...), Solver.PRD(...) or Solver.BLA(...), "
+        "or build a separate self-weight-only problem for CRA."
+    )
+
+
 def _resolve_density(model: BlockModel, density: Optional[float]) -> float:
     """Return the density used to rescale forces: the first block that declares one."""
     if density is not None:
@@ -237,6 +260,7 @@ def rbe_solve(
     -------
     :class:`~compas_dem.problem.Results`
     """
+    _reject_unsupported_boundary_conditions(problem)
     mu = _resolve_mu(problem, mu)
     density = _resolve_density(model, density)
 
@@ -293,6 +317,8 @@ def cra_solve(
     -------
     :class:`~compas_dem.problem.Results`
     """
+    _reject_unsupported_boundary_conditions(problem)
+
     options = dict(DEFAULT_IPOPT_OPTIONS)
     options.update(ipopt_options or {})
 

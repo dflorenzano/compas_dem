@@ -1,19 +1,26 @@
 import os
 
 import compas
+from compas_dem.models import Analysis
+from compas_dem.problem import PointLoad
 from compas_dem.problem import Problem
 
 HERE = os.path.dirname(__file__)
 
-model = compas.json_load(os.path.join(HERE, "DEM_model.json"))
-problem: Problem = compas.json_load(os.path.join(HERE, "DEM_problem.json"))
+analysis: Analysis = compas.json_load(os.path.join(HERE, "DEM_analysis.json"))
 
-problem.add_point_load(block_index=14, force=[0, 0, -50000.0])
+# A different set of boundary conditions means a new problem, not a reordering of
+# an existing one. The analysis holds both problems over the same model.
+problem = Problem(analysis.model, name="Point load")
+problem.set_contact_model("MohrCoulomb", mu=0.5)
 
-compas.json_dump(problem, os.path.join(HERE, "DEM_problem_updated.json"))
+# A point load is anchored to a vertex or to a face centroid of the block; a load
+# at the block centroid would produce no moment and be indistinguishable from a
+# body force. Run inspect_model() below to check which face index you want.
+problem.add(PointLoad.at_face(block=14, face=4, force=[0, 0, -50000.0]))
 
-problem.inspect_model(model)
+analysis.add_problem(problem)
 
-# viewer = DEMViewer(model)
-# viewer.add_solution(scale=10e-12)
-# viewer.show()
+compas.json_dump(analysis, os.path.join(HERE, "DEM_analysis.json"))
+
+problem.inspect_model()

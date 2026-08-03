@@ -5,7 +5,10 @@ dependencies:
   - python
   - pip
   - compas >=2.8.1
-  - ipopt ==3.14.9
+  # 3.14.9 (conda-forge build h843a782_1 on osx-arm64) ships the library without the
+  # `ipopt` executable, which is what pyomo shells out to. CRA and RBE then fail at
+  # solve time with "No executable found for solver 'ipopt'".
+  - ipopt >=3.14.13
   - pyomo ==6.4.2
   - numpy <2.0
   - pip:

@@ -1,23 +1,23 @@
 import os
 
 import compas
+from compas_dem.models import Analysis
 from compas_dem.problem import Solver
 
 HERE = os.path.dirname(__file__)
 
-model = compas.json_load(os.path.join(HERE, "DEM_model.json"))
-problem = compas.json_load(os.path.join(HERE, "DEM_problem.json"))
+# The analysis carries the model and the problem together, so the problem is
+# already bound to its model and can be solved straight away.
+analysis: Analysis = compas.json_load(os.path.join(HERE, "DEM_analysis.json"))
+problem = analysis.problems[0]
 
-# lmgc90 = Solver.LMGC90(duration=1.0, n_steps=100, urf_threshold=0.001)
-# problem.solver(lmgc90)
-result = model.solve(problem)
+problem.set_solver(Solver.LMGC90(n_steps=100, dt=0.001))
+result = problem.solve()
 
-lmgc90 = Solver.LMGC90(n_steps=100, dt=0.001)
-problem.solver(lmgc90)
-result = model.solve(problem)
+# Solving records the results on the analysis, so dumping the analysis persists
+# the model, the problem and its results as one object.
+compas.json_dump(analysis, os.path.join(HERE, "DEM_analysis.json"))
 
-compas.json_dump(result, os.path.join(HERE, "DEM_results.json"))
-
-# viewer = DEMViewer(model)
+# viewer = DEMViewer(analysis.model)
 # viewer.add_solution(result, scale=0.5)
 # viewer.show()

@@ -1,7 +1,13 @@
 from compas.geometry import Vector
 from compas_cgal.measure import mesh_volume
 from compas_dem.problem.boundary_condition import LOADING_TYPES
-from compas_dem.problem.boundary_condition import check_loading_type
+from compas_dem.problem.boundary_condition import BodyForce
+from compas_dem.problem.boundary_condition import Displacement
+from compas_dem.problem.boundary_condition import Load
+from compas_dem.problem.boundary_condition import PointLoad
+from compas_dem.problem.boundary_condition import Rotation
+from compas_dem.problem.boundary_condition import SurfaceLoad
+from compas_dem.problem.boundary_condition import Translation
 
 
 def _element_mass(element) -> float:
@@ -25,22 +31,42 @@ def _as_list(boundary_conditions) -> list:
     return [boundary_conditions]
 
 
+def _anchor_point(block, load: PointLoad):
+    """Resolve the application point of a point load against the block geometry.
+
+    Raises
+    ------
+    ValueError
+        If the anchored vertex or face does not exist on the block.
+    """
+    mesh = block.modelgeometry
+    if load.anchor == "vertex":
+        try:
+            return mesh.vertex_coordinates(load.anchor_index)
+        except KeyError:
+            raise ValueError(f"Point load on block {load.block} is anchored to vertex {load.anchor_index}, which does not exist on that block.") from None
+    try:
+        return mesh.face_center(load.anchor_index)
+    except KeyError:
+        raise ValueError(f"Point load on block {load.block} is anchored to face {load.anchor_index}, which does not exist on that block.") from None
+
+
 def resolve_centroidal_loads(model, boundary_conditions) -> dict:
-    """Resolve the loads of the given boundary conditions to (force, moment) pairs at each block centroid.
+    """Resolve the loads among the given boundary conditions to (force, moment) pairs at each block centroid.
 
-    Handles body forces, point loads (with explicit point or moment), and
-    surface loads (converted to equivalent point loads at face centroids).
-    Gravity is intentionally excluded — each solver applies it through its
-    own mechanism.
+    Handles body forces, point loads (anchored to a vertex or a face centroid), and
+    surface loads (tractions converted to equivalent point loads at face centroids).
+    Anything that is not a :class:`~compas_dem.problem.Load` is ignored, so the full
+    ``problem.boundary_conditions`` list can be passed straight in.
 
-    Which boundary conditions to resolve is the caller's decision: the solvers pass
-    ``problem.boundary_conditions``.
+    Self-weight is intentionally excluded — each solver applies it through its own
+    mechanism, from the block material densities.
 
     Parameters
     ----------
     model : :class:`~compas_dem.models.BlockModel`
     boundary_conditions : :class:`~compas_dem.problem.BoundaryCondition` | list[:class:`~compas_dem.problem.BoundaryCondition`]
-        The boundary condition(s) to resolve. Multiple boundary conditions are summed together.
+        The boundary condition(s) to resolve. Multiple loads are summed together.
 
     Returns
     -------
@@ -51,8 +77,12 @@ def resolve_centroidal_loads(model, boundary_conditions) -> dict:
         the static solvers apply. ``by_loading_type`` keeps the same totals split per
         loading type, so a time-stepping solver can give each its own time series
         instead of having to pick one for the whole block.
+
+    Raises
+    ------
+    ValueError
+        If a load references a block, vertex or face that does not exist in the model.
     """
-    boundary_conditions = _as_list(boundary_conditions)
     blocks = {block.graphnode: block for block in model.elements()}
 
     loads = {
@@ -65,79 +95,85 @@ def resolve_centroidal_loads(model, boundary_conditions) -> dict:
     }
 
     def accumulate(idx: int, force: Vector, moment: Vector, loading_type: str) -> None:
-        check_loading_type(loading_type)
         loads[idx]["force"] += force
         loads[idx]["moment"] += moment
         bucket = loads[idx]["by_loading_type"][loading_type]
         bucket["force"] += force
         bucket["moment"] += moment
 
-    for bc in boundary_conditions:
-        for entry in bc.body_forces:
-            a_vec = Vector(*entry["acceleration"])
+    def require_block(idx: int, load):
+        if idx not in blocks:
+            raise ValueError(f"{type(load).__name__} references block {idx}, which does not exist in the model.")
+        return blocks[idx]
+
+    for bc in _as_list(boundary_conditions):
+        if not isinstance(bc, Load):
+            continue
+
+        if isinstance(bc, BodyForce):
+            a_vec = Vector(*bc.acceleration)
             for idx, block in blocks.items():
-                accumulate(idx, a_vec * _element_mass(block), Vector(0, 0, 0), entry["loading_type"])
+                accumulate(idx, a_vec * _element_mass(block), Vector(0, 0, 0), bc.loading_type)
 
-        for entry in bc.point_loads:
-            idx = entry["block_index"]
-            if idx not in blocks:
-                raise ValueError(f"Point load references block_index={idx} which does not exist in the model.")
-            force = Vector(*(entry["force"] or [0.0, 0.0, 0.0]))
-            if entry["point"] is not None:
-                r = Vector(*entry["point"]) - blocks[idx].point
-                moment = r.cross(force)
-            elif entry["moment"] is not None:
-                moment = Vector(*entry["moment"])
-            else:
-                moment = Vector(0, 0, 0)
-            accumulate(idx, force, moment, entry["loading_type"])
+        elif isinstance(bc, PointLoad):
+            block = require_block(bc.block, bc)
+            force = Vector(*bc.force)
+            lever = Vector(*_anchor_point(block, bc)) - block.point
+            accumulate(bc.block, force, lever.cross(force), bc.loading_type)
 
-        for entry in bc.surface_loads:
-            idx = entry["block_index"]
-            if idx not in blocks:
-                raise ValueError(f"Surface load references block_index={idx} which does not exist in the model.")
-            block = blocks[idx]
-            loading_point = block.modelgeometry.face_center(entry["face_index"])
-            area = block.modelgeometry.face_area(entry["face_index"])
-            force = Vector(*entry["load"]) * area
-            r = Vector(*loading_point) - block.point
-            moment = r.cross(force)
-            accumulate(idx, force, moment, entry["loading_type"])
+        elif isinstance(bc, SurfaceLoad):
+            block = require_block(bc.block, bc)
+            mesh = block.modelgeometry
+            if bc.face not in list(mesh.faces()):
+                raise ValueError(f"Surface load on block {bc.block} references face {bc.face}, which does not exist on that block.")
+            force = Vector(*bc.traction) * mesh.face_area(bc.face)
+            lever = Vector(*mesh.face_center(bc.face)) - block.point
+            accumulate(bc.block, force, lever.cross(force), bc.loading_type)
+
+        else:
+            raise TypeError(f"{type(bc).__name__} is a Load but resolve_centroidal_loads does not know how to resolve it.")
 
     return loads
 
 
 def resolve_centroidal_displacements(boundary_conditions) -> dict:
-    """Resolve the prescribed displacements and rotations of the given boundary conditions, per block index.
+    """Resolve the prescribed movements among the given boundary conditions, per block index.
 
-    Which boundary conditions to resolve is the caller's decision: the solvers pass
-    ``problem.boundary_conditions``. Supports are not part of the boundary conditions;
-    they come from the model (``block.is_support``).
+    Anything that is not a :class:`~compas_dem.problem.Displacement` is ignored, so the
+    full ``problem.boundary_conditions`` list can be passed straight in. Supports are
+    not boundary conditions; they come from the model (``block.is_support``).
 
     Parameters
     ----------
     boundary_conditions : :class:`~compas_dem.problem.BoundaryCondition` | list[:class:`~compas_dem.problem.BoundaryCondition`]
-        The boundary condition(s) to resolve. Multiple boundary conditions are merged
-        together, per component.
+        The boundary condition(s) to resolve. Movements on the same block are merged
+        per component; a later boundary condition overrides an earlier one on the
+        components it prescribes.
 
     Returns
     -------
     dict[int, dict]
         ``{block_index: {"translation": list, "rotation": list}}``
         Components are ``None`` where unconstrained.
-
     """
     displacements = {}
 
     for bc in _as_list(boundary_conditions):
-        for entry in bc.displacements:
-            idx = entry["block_index"]
-            if idx not in displacements:
-                displacements[idx] = {"translation": [None, None, None], "rotation": [None, None, None]}
-            for key in ("translation", "rotation"):
-                if entry[key] is not None:
-                    for j, v in enumerate(entry[key]):
-                        if v is not None:
-                            displacements[idx][key][j] = v
+        if not isinstance(bc, Displacement):
+            continue
+
+        if bc.block not in displacements:
+            displacements[bc.block] = {"translation": [None, None, None], "rotation": [None, None, None]}
+
+        if isinstance(bc, Translation):
+            key = "translation"
+        elif isinstance(bc, Rotation):
+            key = "rotation"
+        else:
+            raise TypeError(f"{type(bc).__name__} is a Displacement but resolve_centroidal_displacements does not know how to resolve it.")
+
+        for j, value in enumerate(bc.components):
+            if value is not None:
+                displacements[bc.block][key][j] = value
 
     return displacements

@@ -1,15 +1,18 @@
 import os
 
 import compas
+from compas_dem.models import Analysis
 from compas_dem.problem import Solver
 
 HERE = os.path.dirname(__file__)
 
-model = compas.json_load(os.path.join(HERE, "DEM_model.json"))
-problem = compas.json_load(os.path.join(HERE, "DEM_problem.json"))
+analysis: Analysis = compas.json_load(os.path.join(HERE, "DEM_analysis.json"))
+problem = analysis.problems[0]
 
-cra = Solver.CRA(verbose=True)
-problem.solver(cra)
-result = model.solve(problem)
+# CRA and RBE resolve self-weight against contact forces only. They refuse a
+# problem carrying loads or prescribed movements rather than dropping them
+# silently, which is fine here: this problem is self-weight alone.
+problem.set_solver(Solver.CRA(verbose=True))
+result = problem.solve()
 
-compas.json_dump(result, os.path.join(HERE, "DEM_results.json"))
+compas.json_dump(analysis, os.path.join(HERE, "DEM_analysis.json"))

@@ -1,6 +1,7 @@
 import os
 
 import compas
+from compas_dem.models import Analysis
 from compas_dem.problem import Problem
 from compas_dem.viewer import DEMViewer
 
@@ -16,27 +17,30 @@ model = compas.json_load(
 # =============================================================================
 # Create Problem
 # =============================================================================
+# Supports are already flagged on the model, and the solvers read them from
+# there — a problem carries boundary conditions, contact properties and the
+# solver, nothing else.
 
-problem = Problem(model)
-
-# =============================================================================
-# Add supports
-# =============================================================================
-
-problem.add_supports_from_model()
+problem = Problem(model, name="Self-weight")
 
 # =============================================================================
 # Add contact properties
 # =============================================================================
 
-problem.add_contact_model("MohrCoulomb", mu=0.5)
+problem.set_contact_model("MohrCoulomb", mu=0.5)
 
 # =============================================================================
-# Save problem
+# Save analysis
 # =============================================================================
+# The analysis owns the model, its problems and their results, and writes the
+# model exactly once. Reloading it gives back problems already bound to the
+# model, ready to solve.
 
-HERE = os.path.dirname(__file__)
-compas.json_dump(problem, os.path.join(HERE, "DEM_problem.json"))
+analysis = Analysis(model, name="Three blocks")
+analysis.add_problem(problem)
+
+compas.json_dump(analysis, os.path.join(HERE, "DEM_analysis.json"))
+
 # =============================================================================
 # Visualize problem
 # =============================================================================

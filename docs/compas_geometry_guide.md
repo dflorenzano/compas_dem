@@ -346,15 +346,17 @@ stone = Stone(density=2000)
 model.add_material(stone)
 model.assign_material(stone, elements=list(model.elements()))
 
-problem = Problem(model)
-problem.add_contact_model("MohrCoulomb", phi=25, c=0.0)
-problem.add_supports_from_model()
-problem.solve(Solver.PR3D())
+# Supports live on the model; the solvers read block.is_support from there.
+model.add_supports([0, 39])
 
-# 7. Read forces
-for contact in model.contacts():
-    for f in contact.forces:
-        print(f["c_np"], f["c_u"], f["c_v"])
+problem = Problem(model, name="Self-weight")
+problem.set_contact_model("MohrCoulomb", phi=25, c=0.0)
+problem.set_solver(Solver.PRD())
+results = problem.solve()
+
+# 7. Read forces — Results is standalone, keyed by contact edge
+for edge in results.edges():
+    print(results.force_normal(edge), results.force_tangent1(edge), results.force_tangent2(edge))
 ```
 
 ---

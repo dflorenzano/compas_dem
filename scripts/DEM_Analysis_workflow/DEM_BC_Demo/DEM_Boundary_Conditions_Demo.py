@@ -2,9 +2,13 @@ import pathlib
 
 import compas
 from compas_dem.material import Stone
+from compas_dem.models import Analysis
 from compas_dem.models import BlockModel
+from compas_dem.problem import PointLoad
 from compas_dem.problem import Problem
 from compas_dem.problem import Solver
+from compas_dem.problem import SurfaceLoad
+from compas_dem.problem import Translation
 from compas_dem.templates import ArchTemplate
 from compas_dem.viewer import DEMViewer
 
@@ -42,58 +46,65 @@ model.add_material(generic)
 model.assign_material(generic, elements=list(model.elements()))
 
 # =============================================================================
-# Dump Model
+# Problems
 # =============================================================================
+# Boundary conditions are objects, built standalone and registered with
+# problem.add(). Every boundary condition on a problem is applied together, so a
+# different set of them means a different problem — which is why the self-weight
+# case below is its own problem rather than a named group inside this one.
 
-compas.json_dump(data=model, fp=pathlib.Path(__file__).parent / "dem_arch_model.json")
+loaded = Problem(model, name="Loads and settlement")
+loaded.set_contact_model("MohrCoulomb", phi=35, c=0.0)
+loaded.set_joint_model(kn=1e9, kt=5e8)
+
+# A prescribed movement on a support block overrides its fixity, per component.
+loaded.add(Translation(block=0, dx=0.5))
+
+# A traction in [N/m2]; the resultant is the traction times the face area.
+for index in range(3, 6):
+    loaded.add(SurfaceLoad(block=index, face=4, traction=[0, 0, -10000]))
+
+# Point loads anchor to a vertex or a face centroid, never to the block centroid:
+# a centroidal force produces no moment and is just a body force.
+loaded.add(PointLoad.at_face(block=10, face=4, force=[0, 0, -100000]))
+
+# Self-weight is applied by every solver from the block densities. It is not a
+# boundary condition, so this problem carries none at all.
+self_weight = Problem(model, name="Self-weight")
+self_weight.set_contact_model("MohrCoulomb", phi=35, c=0.0)
 
 # =============================================================================
-# Problem
+# Analysis
 # =============================================================================
+# One analysis holds the model, both problems and their results, and writes the
+# model exactly once.
 
-problem = Problem(model)
-problem.set_contact_model("MohrCoulomb", phi=35, c=0.0)
-problem.set_joint_model(kn=1e9, kt=5e8)
+analysis = Analysis(model, name="Arch BC demo")
+analysis.add_problem(loaded)
+analysis.add_problem(self_weight)
 
-bc1 = problem.add_boundary_condition("Gravity")
-bc2 = problem.add_boundary_condition("Displacement")
-bc3 = problem.add_boundary_condition("Surface Load")
-bc4 = problem.add_boundary_condition("Point Load")
+# loaded.inspect_model()
 
-problem.add_displacement(block_index=0, displacement=[0.5, 0, 0], boundary_condition=bc2)
+# =============================================================================
+# Solve
+# =============================================================================
+# CRA and RBE resolve self-weight against contact forces and have no mechanism
+# for applied loads, so they refuse the loaded problem instead of quietly
+# returning a result for a different problem than the one set up here.
 
-for b_idx in range(3, 6):
-    problem.add_surface_load(block_index=b_idx, load=(0, 0, -10000), face_index=4, boundary_condition=bc3)
+self_weight.set_solver(Solver.CRA())
+result_cra = self_weight.solve()
 
-problem.add_point_load_at_centroid(block_index=10, force=[0, 0, -100000], boundary_condition=bc4)
+loaded.set_solver(Solver.LMGC90(duration=10.0, dt=0.001, verbose=100))
+result_lmgc90 = loaded.solve()
 
-# problem.set_solve_order([0])
-# oder
-# problem.set_solve_order(["Gravity", "Displacement", "Surface Load", "Point Load"])
-
-PATH = pathlib.Path(__file__).parent / "dem_arch.json"
-compas.json_dump(data=problem, fp=PATH)
-
-# problem.inspect_model(model)
-
-bla: Solver = Solver.BLA(n_steps=1, associative=False)
-cra: Solver = Solver.CRA()
-lmgc90: Solver = Solver.LMGC90(duration=10.0, dt=0.001, verbose=100)
-
-problem.set_solver(cra)
-
-result_cra = problem.solve()
-
-problem.set_solver(lmgc90)
-
-result_lmgc90 = problem.solve()
-
-# Dump results
-compas.json_dump(data=result_cra, fp=pathlib.Path(__file__).parent / "dem_arch_result.json")
+# Solving records results on the analysis, so this one file carries the model,
+# both problems and both sets of results.
+compas.json_dump(data=analysis, fp=pathlib.Path(__file__).parent / "dem_arch_analysis.json")
 
 # Viewer
 viewer = DEMViewer(model)
 # viewer.setup()
-viewer.add_solution(result_cra, name="CRA", scale=0.5)
-viewer.add_solution(result_lmgc90, name="LMGC90", scale=0.5)
+viewer.add_solution(result_cra, name="CRA (self-weight)", scale=0.5)
+viewer.add_solution(result_lmgc90, name="LMGC90 (loaded)", scale=0.5)
 viewer.show()

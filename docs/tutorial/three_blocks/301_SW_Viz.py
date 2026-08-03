@@ -1,36 +1,37 @@
 import os
 
 import compas
+from compas_dem.models import Analysis
 from compas_dem.viewer import DEMViewer
 
 # =============================================================================
-# Load Problem
+# Load analysis
 # =============================================================================
 
 HERE = os.path.dirname(__file__)
-problem = compas.json_load(
-    os.path.join(HERE, "DEM_results.json"),
-)
+analysis: Analysis = compas.json_load(os.path.join(HERE, "DEM_analysis.json"))
+problem = analysis.problems[0]
+results = analysis.results_for(problem)
 
 # =============================================================================
-# Visualize block results
+# Inspect block results
 # =============================================================================
+# Results are a standalone object keyed by block index and contact edge; they
+# are never written back into the model.
 
-graph = problem.model.graph
-for node in graph.nodes():
-    block_transformation = graph.node_attribute(node, "transformation")
+for node in results.nodes():
+    block_transformation = results.transformation(node)
     # print(f"Block {node} transformation:\n{block_transformation}\n")
 
-for edge in graph.edges():
-    gap = graph.edge_attribute(edge, "gap")
-    magnitude = graph.edge_attribute(edge, "force_magnitude")
+for edge in results.edges():
+    gap = results.gap(edge)
+    magnitude = results.force_magnitude(edge)
     print(f"Edge {edge} gap: {gap}, force magnitude: {magnitude}")
 
-
 # =============================================================================
-# Visualize problem
+# Visualize results
 # =============================================================================
 
-viewer = DEMViewer(problem.model)
-viewer.add_solution(scale=0.5)
+viewer = DEMViewer(analysis.model)
+viewer.add_solution(results, scale=0.5)
 viewer.show()

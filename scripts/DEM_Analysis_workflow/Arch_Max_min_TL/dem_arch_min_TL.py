@@ -2,6 +2,7 @@ from compas_dem.material import Stone
 from compas_dem.models import BlockModel
 from compas_dem.problem import Problem
 from compas_dem.problem import Solver
+from compas_dem.problem import Translation
 from compas_dem.templates import ArchTemplate
 from compas_dem.viewer import DEMViewer
 
@@ -41,18 +42,21 @@ model.assign_material(limestone, elements=list(model.elements()))
 # =============================================================================
 # Problem
 # =============================================================================
-problem = Problem(model)
-problem.add_contact_model("MohrCoulomb", phi=40, c=0)
-problem.add_support(49)
+# Supports belong to the model, not to the problem.
+model.add_support(block_index=49)
+
+problem = Problem(model, name="Min thrust line")
+problem.set_contact_model("MohrCoulomb", phi=40, c=0)
 
 block0 = model.graph.node_element(0)
 print("block 0 centroid:", block0.modelgeometry.centroid())
 
-problem.add_displacement(block_index=0, displacement=[0.1, 0, 0])
-# lmgc90 = Solver.LMGC90(n_steps=100, dt=0.01)
-lmgc90 = Solver.PRD(linear=False)
-problem.solver(lmgc90)
-solution = model.solve(problem)
+# Pull the springing outwards, leaving the other components free.
+problem.add(Translation(block=0, dx=0.1))
+
+# problem.set_solver(Solver.LMGC90(n_steps=100, dt=0.01))
+problem.set_solver(Solver.PRD(linear=False))
+solution = problem.solve()
 # =============================================================================
 # Viz
 # =============================================================================

@@ -12,8 +12,13 @@ import compas
 from compas_dem.material import Stone
 from compas_dem.models import Analysis
 from compas_dem.models import BlockModel
+from compas_dem.problem import BodyForce
+from compas_dem.problem import PointLoad
 from compas_dem.problem import Problem
+from compas_dem.problem import Rotation
 from compas_dem.problem import Solver
+from compas_dem.problem import SurfaceLoad
+from compas_dem.problem import Translation
 from compas_dem.templates import ArchTemplate
 from compas_dem.viewer import DEMViewer
 
@@ -66,7 +71,7 @@ print(f"free blocks: {len(list(model.blocks()))} of {len(list(model.elements()))
 # Problem — contact and joint behaviour
 # =============================================================================
 
-problem = Problem(model)
+problem = Problem(model, name="live + fill + seismic + settlement")
 
 # set_contact_model: string-keyed contact law. "MohrCoulomb" takes either phi
 # (friction angle, degrees) or mu (tan phi), plus c (cohesion) and t_c (tension cutoff).
@@ -76,42 +81,33 @@ problem.set_contact_model("MohrCoulomb", phi=30, c=0)
 problem.set_joint_model(kn=10e10, kt=10e7)
 
 # =============================================================================
-# Boundary conditions — a named group of loads that act together
+# Boundary conditions — typed objects, built standalone and registered
 # =============================================================================
-# Register one per load case; every add_* call below is directed at one explicitly.
-# At solve time the active boundary conditions are summed into one load case.
-
-live = problem.add_boundary_condition("Live")
-fill = problem.add_boundary_condition("Fill")
-seismic = problem.add_boundary_condition("Seismic")
-settlement = problem.add_boundary_condition("Settlement")
+# A boundary condition is either a Load or a Displacement, and each is its own
+# class. Build one, then hand it to problem.add(). There is no second way in, and
+# nothing to select or reorder afterwards: every boundary condition registered on
+# a problem is applied. A different combination means a different problem, which
+# is what "settlement only" further down is for.
+#
+# Self-weight is not among them. Every solver applies it from the block densities,
+# so there is no gravity switch to set — or to forget.
 
 # =============================================================================
-# Loads — the four ways to place a point load
+# Loads — the two ways to place a point load
 # =============================================================================
-# Each names *where* the force acts; the equivalent moment about the block centroid
-# is worked out from that point when the problem is resolved.
+# A point load anchors to a vertex or to a face centroid of the block. It never
+# anchors to the block centroid: a centroidal force induces no moment, which makes
+# it indistinguishable from a body force. The eccentric moment about the centroid
+# is worked out from the resolved anchor position at solve time.
 
-# ...at the block centroid, so no induced moment:
-problem.add_point_load_at_centroid(block_index=CROWN, force=[0, 0, -151500], boundary_condition=live)
-
-# ...at one vertex of the block mesh (eccentric, so it induces a moment):
-problem.add_point_load_at_vertex(block_index=12, vertex_index=0, force=[0, 0, -25000], boundary_condition=live)
+# ...at one vertex of the block mesh:
+problem.add(PointLoad.at_vertex(block=12, vertex=0, force=[0, 0, -25000]))
 
 # ...at the centre of one face:
-problem.add_point_load_at_face(block_index=14, face_index=4, force=[0, 0, -25000], boundary_condition=live)
+problem.add(PointLoad.at_face(block=14, face=4, force=[0, 0, -25000]))
 
-# ...at an arbitrary point in space, here 0.2 m above a block's centroid:
-crown_point = model.graph.node_element(16).point
-problem.add_point_load_at_point(
-    block_index=16,
-    point=[crown_point.x, crown_point.y, crown_point.z + 0.2],
-    force=[0, 0, -25000],
-    boundary_condition=live,
-)
-
-# A couple about the centroid, with no net force:
-problem.add_moment(block_index=CROWN, moment=[0, 5000, 0], boundary_condition=live)
+# Loads can be named; the name is a label for inspect_model, nothing more.
+problem.add(PointLoad.at_face(block=CROWN, face=4, force=[0, 0, -151500], name="crown"))
 
 # =============================================================================
 # Loads — pressure, body force, prescribed movement
@@ -119,30 +115,26 @@ problem.add_moment(block_index=CROWN, moment=[0, 5000, 0], boundary_condition=li
 
 # A traction [N/m2] over one face; multiplied by the face area when resolved.
 for index in range(8, 14):
-    problem.add_surface_load(block_index=index, face_index=4, load=[0, 0, -10000], boundary_condition=fill)
+    problem.add(SurfaceLoad(block=index, face=4, traction=[0, 0, -10000]))
 
 # An acceleration [m/s2] applied to every block, mass-scaled into a force. 0.3 g
 # sideways is the usual way to assess lateral capacity. loading_type="instantaneous"
 # applies it at t=0 and releases it at the end, instead of ramping up and holding.
-problem.add_global_body_force(0.3 * 9.81, 0, 0, loading_type="instantaneous", boundary_condition=seismic)
+# This is on top of self-weight, so do not pass -9.81 here expecting gravity.
+problem.add(BodyForce(acceleration=[0.3 * 9.81, 0, 0], loading_type="instantaneous"))
 
-# A prescribed movement. On a support block it overrides the fixity per component,
-# which is how a settlement analysis is set up.
-problem.add_displacement(block_index=0, displacement=[0.02, 0, 0], boundary_condition=settlement)
-problem.add_rotation(block_index=0, rotation=[0, 0.001, 0], boundary_condition=settlement)
+# A prescribed movement, per component. On a support block it overrides the fixity
+# for the components it names, which is how a settlement analysis is set up;
+# components left as None stay unconstrained.
+problem.add(Translation(block=0, dx=0.02))
+problem.add(Rotation(block=0, ry=0.001))
 
-# =============================================================================
-# Solve order
-# =============================================================================
-# Reordering never drops anything: whatever is left out keeps its relative order
-# behind the boundary conditions named here.
-
-problem.set_solve_order(["Live", "Fill"])
-print(f"solve order: {[bc.name for bc in problem.boundary_conditions]}")
+# Loads and prescribed movements partition the boundary conditions by type.
+print(f"loads: {len(problem.loads)}, prescribed movements: {len(problem.displacements)}")
 
 # Draw the model with its indices, loads and supports before committing to a solve.
 # Note this halts the script when the viewer closes unless you pass kill=False.
-# problem.inspect_model(model, show_blocks=True)
+# problem.inspect_model(show_blocks=True)
 
 # =============================================================================
 # Solvers — every backend is configured the same way, through Solver.<NAME>()
@@ -166,23 +158,34 @@ prd = Solver.PRD(n_steps=1, open_tol=1e-3, solver="CLARABEL")
 # =============================================================================
 # set_solver then solve; the model comes from the problem, so solve() takes no arguments.
 # Each call returns its own Results object, so they can be compared and overlaid.
+# Solving also records the result on the analysis this problem belongs to.
+#
+# Not every solver can apply every boundary condition. CRA and RBE resolve
+# self-weight against contact forces and have no mechanism for applied loads or
+# prescribed movements, so they refuse a problem carrying them rather than
+# returning a result for a different problem than the one set up. That is why they
+# are used on the self-weight problem below, not on this one.
 
 solutions = {}
 
 problem.set_solver(bla)
 solutions["BLA"] = problem.solve()
 
-problem.set_solver(rbe)
-solutions["RBE"] = problem.solve()
-
 problem.set_solver(lmgc90)
 solutions["LMGC90"] = problem.solve()
 
-# problem.set_solver(cra)  # needs compas_cra + IPOPT; slowest of the five
-# solutions["CRA"] = problem.solve()
-
 problem.set_solver(prd)  # needs compas_pr3d
 solutions["PRD"] = problem.solve()
+
+# Self-weight alone, which is what CRA and RBE are for.
+self_weight = Problem(model, name="self-weight")
+self_weight.set_contact_model("MohrCoulomb", phi=30, c=0)
+
+self_weight.set_solver(rbe)
+solutions["RBE"] = self_weight.solve()
+
+# self_weight.set_solver(cra)  # needs compas_cra + the ipopt executable; slowest of the five
+# solutions["CRA"] = self_weight.solve()
 
 # =============================================================================
 # Results
@@ -204,20 +207,22 @@ compas.json_dump(data=solutions["BLA"], fp=HERE / "dem_new_features_result.json"
 # =============================================================================
 # Analysis — one model, its problems, serialized together
 # =============================================================================
-# A problem keeps only its model's id, never the geometry, so dumping problems on
-# their own would leave them without a model. Analysis is the container that holds
-# the model alongside them: the geometry is written once, and on load it is fed
-# back into every problem so each one can solve straight away.
+# A problem holds its model as a live object, but writes it out as a guid only, so
+# dumping a problem on its own would leave it unbound. Analysis is the container
+# that holds the model alongside them: the geometry is written once, and on load
+# the real model is handed back to every problem so each can solve straight away.
+# The model and the problems are independent; the results are owned by the analysis.
 
-analysis = Analysis(name="arch study")
-analysis.set_model(model)
+analysis = Analysis(model, name="arch study")
 analysis.add_problem(problem)
+analysis.add_problem(self_weight)
 
-# A second problem over the same model — still only one copy of the geometry on disk.
+# A second problem over the same model — still only one copy of the geometry on
+# disk. This is what replaces picking a subset of boundary conditions to solve:
+# a different combination is a different problem.
 settlement_only = Problem(model, name="settlement only")
 settlement_only.set_contact_model("MohrCoulomb", phi=30, c=0)
-support_movement = settlement_only.add_boundary_condition("Settlement")
-settlement_only.add_displacement(block_index=0, displacement=[0.05, 0, 0], boundary_condition=support_movement)
+settlement_only.add(Translation(block=0, dx=0.05))
 settlement_only.set_solver(Solver.BLA(n_steps=50))
 analysis.add_problem(settlement_only)
 
@@ -234,9 +239,11 @@ print(f"\nanalysis '{reloaded.name}': {len(reloaded.problems)} problems")
 print(f"  model: {len(list(reloaded.model.elements()))} blocks, {len(list(reloaded.model.supports()))} supports")
 
 for reloaded_problem in reloaded.problems:
-    # .model resolves because Analysis re-linked it on load — no load_model() needed.
+    # .model resolves because Analysis handed the real model back on load — there is
+    # nothing to re-link by hand.
     linked = reloaded_problem.model is reloaded.model
-    print(f"  '{reloaded_problem.name}': {len(reloaded_problem.boundary_conditions)} BCs, model linked = {linked}")
+    solved = reloaded.results_for(reloaded_problem) is not None
+    print(f"  '{reloaded_problem.name}': {len(reloaded_problem.boundary_conditions)} BCs, model linked = {linked}, results kept = {solved}")
 
 # So the reloaded problem is immediately solvable:
 # result = reloaded.problems[0].solve()
