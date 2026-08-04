@@ -10,10 +10,13 @@ import pytest
 from compas_dem.models import Analysis
 from compas_dem.models import BlockModel
 from compas_dem.problem import BodyForce
+from compas_dem.problem import Moment
 from compas_dem.problem import PointLoad
 from compas_dem.problem import Problem
 from compas_dem.problem import Results
+from compas_dem.problem import Rotation
 from compas_dem.problem import Solver
+from compas_dem.problem import SurfaceLoad
 from compas_dem.problem import Translation
 
 # =============================================================================
@@ -69,21 +72,83 @@ def test_solve_ordering_is_not_exposed(unit_boxes):
 @pytest.mark.parametrize(
     "removed",
     [
-        "add_point_load_at_vertex",
-        "add_point_load_at_face",
-        "add_point_load_at_point",
-        "add_point_load_at_centroid",
-        "add_global_body_force",
-        "add_surface_load",
-        "add_displacement",
-        "add_rotation",
-        "add_moment",
+        "add_boundary_condition",
+        "set_solve_order",
+        "add_supports_from_model",
+        "add_support",
         "load_model",
+        "add_gravity",
+        "add_global_body_force",
+        "add_displacement",
     ],
 )
-def test_duplicated_problem_level_api_is_gone(unit_boxes, removed):
-    """There is one way to register a boundary condition: problem.add(obj)."""
+def test_removed_api_is_gone(unit_boxes, removed):
+    """These have no replacement: they were duplication, dead code, or model-level."""
     assert not hasattr(Problem(unit_boxes), removed)
+
+
+@pytest.mark.parametrize(
+    "call, expected",
+    [
+        (lambda p: p.add_point_load_at_vertex(block=0, vertex=0, force=[0, 0, -1]), PointLoad),
+        (lambda p: p.add_point_load_at_face(block=0, face=0, force=[0, 0, -1]), PointLoad),
+        (lambda p: p.add_point_load_at_point(block=0, point=[1, 2, 3], force=[0, 0, -1]), PointLoad),
+        (lambda p: p.add_point_load_at_centroid(block=0, force=[0, 0, -1]), PointLoad),
+        (lambda p: p.add_moment(block=0, moment=[0, 1, 0]), Moment),
+        (lambda p: p.add_surface_load(block=0, face=0, traction=[0, 0, -1]), SurfaceLoad),
+        (lambda p: p.add_body_force(acceleration=[1, 0, 0]), BodyForce),
+        (lambda p: p.add_translation(block=0, dx=0.1), Translation),
+        (lambda p: p.add_rotation(block=0, rz=0.1), Rotation),
+    ],
+)
+def test_problem_helper_builds_registers_and_returns(unit_boxes, call, expected):
+    """The helpers are sugar over the classes: they build, register, and hand back."""
+    problem = Problem(unit_boxes)
+    bc = call(problem)
+    assert isinstance(bc, expected)
+    assert problem.boundary_conditions == [bc]
+
+
+def test_problem_helpers_take_no_boundary_condition_kwarg(unit_boxes):
+    """The old footgun: a boundary_condition= kwarg that raised if you forgot it."""
+    import inspect
+
+    problem = Problem(unit_boxes)
+    helpers = [n for n in dir(problem) if n.startswith("add_") and n not in ("add_problem",)]
+    assert helpers, "expected the convenience helpers to exist"
+    for name in helpers:
+        params = inspect.signature(getattr(problem, name)).parameters
+        assert "boundary_condition" not in params, f"{name} still takes boundary_condition="
+
+
+def test_problem_helper_matches_the_class_it_wraps(unit_boxes):
+    """A helper must not be a second implementation -- same data as the class."""
+    direct = PointLoad.at_face(block=3, face=2, force=[0, 0, -5000], loading_type="instantaneous")
+    viahelper = Problem(unit_boxes).add_point_load_at_face(block=3, face=2, force=[0, 0, -5000], loading_type="instantaneous")
+    assert viahelper.__data__ == direct.__data__
+
+
+def test_every_load_type_is_still_reachable(unit_boxes):
+    """The API was deduplicated, not reduced: no load type was dropped.
+
+    compas_dem keeps the full toolset; narrowing what a user is offered is the
+    downstream plugin's job, not the library's.
+    """
+    problem = Problem(unit_boxes)
+    for bc in [
+        PointLoad.at_vertex(block=0, vertex=0, force=[0, 0, -1]),
+        PointLoad.at_face(block=0, face=0, force=[0, 0, -1]),
+        PointLoad.at_point(block=0, point=[1, 2, 3], force=[0, 0, -1]),
+        PointLoad.at_centroid(block=0, force=[0, 0, -1]),
+        Moment(block=0, moment=[0, 1, 0]),
+        SurfaceLoad(block=0, face=0, traction=[0, 0, -1]),
+        BodyForce(acceleration=[1, 0, 0]),
+        Translation(block=0, dx=0.1),
+        Rotation(block=0, rz=0.1),
+    ]:
+        problem.add(bc)
+    assert len(problem.loads) == 7
+    assert len(problem.displacements) == 2
 
 
 # =============================================================================

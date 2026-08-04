@@ -2,6 +2,7 @@ from .boundary_condition import BodyForce
 from .boundary_condition import BoundaryCondition
 from .boundary_condition import Displacement
 from .boundary_condition import Load
+from .boundary_condition import Moment
 from .boundary_condition import PointLoad
 from .boundary_condition import Rotation
 from .boundary_condition import SurfaceLoad
@@ -15,6 +16,7 @@ __all__ = [
     "BoundaryCondition",
     "Displacement",
     "Load",
+    "Moment",
     "PointLoad",
     "Problem",
     "Results",

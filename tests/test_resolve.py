@@ -9,6 +9,7 @@ import pytest
 from compas_dem.analysis.resolve import resolve_centroidal_displacements
 from compas_dem.analysis.resolve import resolve_centroidal_loads
 from compas_dem.problem import BodyForce
+from compas_dem.problem import Moment
 from compas_dem.problem import PointLoad
 from compas_dem.problem import Rotation
 from compas_dem.problem import SurfaceLoad
@@ -39,6 +40,29 @@ def test_point_load_at_vertex_produces_eccentric_moment(unit_boxes, block_indice
     loads = resolve_centroidal_loads(unit_boxes, [PointLoad.at_vertex(block=lower, vertex=0, force=[0, 0, -1000])])
     assert approx(loads[lower]["force"]) == [0.0, 0.0, -1000.0]
     assert approx(loads[lower]["moment"]) == [500.0, -500.0, 0.0]
+
+
+def test_point_load_at_centroid_induces_no_moment(unit_boxes, block_indices):
+    lower = block_indices[0]
+    loads = resolve_centroidal_loads(unit_boxes, [PointLoad.at_centroid(block=lower, force=[0, 0, -1000])])
+    assert approx(loads[lower]["force"]) == [0.0, 0.0, -1000.0]
+    assert approx(loads[lower]["moment"]) == [0.0, 0.0, 0.0]
+
+
+def test_point_load_at_explicit_point_uses_that_lever_arm(unit_boxes, block_indices):
+    lower = block_indices[0]
+    # Centroid is (0, 0, 0.5); a point 1 m out in +x gives lever (1, 0, -0.5).
+    # lever x force, force = (0, 0, -1000) -> (0*-1000 - -0.5*0, -0.5*0 - 1*-1000, 0) = (0, 1000, 0)
+    loads = resolve_centroidal_loads(unit_boxes, [PointLoad.at_point(block=lower, point=[1.0, 0.0, 0.0], force=[0, 0, -1000])])
+    assert approx(loads[lower]["force"]) == [0.0, 0.0, -1000.0]
+    assert approx(loads[lower]["moment"]) == [0.0, 1000.0, 0.0]
+
+
+def test_moment_is_a_pure_couple(unit_boxes, block_indices):
+    lower = block_indices[0]
+    loads = resolve_centroidal_loads(unit_boxes, [Moment(block=lower, moment=[0, 5000, 0])])
+    assert approx(loads[lower]["force"]) == [0.0, 0.0, 0.0]
+    assert approx(loads[lower]["moment"]) == [0.0, 5000.0, 0.0]
 
 
 def test_surface_load_is_a_traction_scaled_by_face_area(unit_boxes, block_indices):

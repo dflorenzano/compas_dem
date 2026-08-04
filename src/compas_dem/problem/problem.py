@@ -12,7 +12,9 @@ from compas_dem.problem.boundary_condition import BodyForce
 from compas_dem.problem.boundary_condition import BoundaryCondition
 from compas_dem.problem.boundary_condition import Displacement
 from compas_dem.problem.boundary_condition import Load
+from compas_dem.problem.boundary_condition import Moment
 from compas_dem.problem.boundary_condition import PointLoad
+from compas_dem.problem.boundary_condition import Rotation
 from compas_dem.problem.boundary_condition import SurfaceLoad
 from compas_dem.problem.boundary_condition import Translation
 from compas_dem.problem.solvers import Solver
@@ -171,6 +173,66 @@ class Problem(Data):
         self._boundary_conditions.append(boundary_condition)
         return boundary_condition
 
+    # ----------------------------------------------------------------------------
+    # Convenience: build a boundary condition and register it in one call
+    # ----------------------------------------------------------------------------
+    # Each of these constructs the corresponding class and hands it to add(). They are
+    # sugar, not a second implementation: the class is the only place the data lives,
+    # and every method returns the object it built so it can be kept for reference.
+    #
+    # Unlike the pre-6e5dd23 versions, none of them takes a boundary_condition= keyword.
+    # There is nothing to forget and nothing to target: a problem is the load case.
+
+    def add_point_load_at_vertex(self, block: int, vertex: int, force: list, loading_type: str = "ramp", name: Optional[str] = None) -> PointLoad:
+        """Add a concentrated force at a vertex of a block. See :class:`~compas_dem.problem.PointLoad`."""
+        return self.add(PointLoad.at_vertex(block=block, vertex=vertex, force=force, loading_type=loading_type, name=name))
+
+    def add_point_load_at_face(self, block: int, face: int, force: list, loading_type: str = "ramp", name: Optional[str] = None) -> PointLoad:
+        """Add a concentrated force at the centroid of a face of a block. See :class:`~compas_dem.problem.PointLoad`."""
+        return self.add(PointLoad.at_face(block=block, face=face, force=force, loading_type=loading_type, name=name))
+
+    def add_point_load_at_point(self, block: int, point: list, force: list, loading_type: str = "ramp", name: Optional[str] = None) -> PointLoad:
+        """Add a concentrated force at explicit coordinates on a block. See :class:`~compas_dem.problem.PointLoad`."""
+        return self.add(PointLoad.at_point(block=block, point=point, force=force, loading_type=loading_type, name=name))
+
+    def add_point_load_at_centroid(self, block: int, force: list, loading_type: str = "ramp", name: Optional[str] = None) -> PointLoad:
+        """Add a concentrated force at the centroid of a block, inducing no moment. See :class:`~compas_dem.problem.PointLoad`."""
+        return self.add(PointLoad.at_centroid(block=block, force=force, loading_type=loading_type, name=name))
+
+    def add_moment(self, block: int, moment: list, loading_type: str = "ramp", name: Optional[str] = None) -> Moment:
+        """Add a pure couple about a block centroid. See :class:`~compas_dem.problem.Moment`."""
+        return self.add(Moment(block=block, moment=moment, loading_type=loading_type, name=name))
+
+    def add_surface_load(self, block: int, face: int, traction: list, loading_type: str = "ramp", name: Optional[str] = None) -> SurfaceLoad:
+        """Add a distributed traction over a block face. See :class:`~compas_dem.problem.SurfaceLoad`."""
+        return self.add(SurfaceLoad(block=block, face=face, traction=traction, loading_type=loading_type, name=name))
+
+    def add_body_force(self, acceleration: list, loading_type: str = "ramp", name: Optional[str] = None) -> BodyForce:
+        """Add a global body acceleration applied to every block. See :class:`~compas_dem.problem.BodyForce`."""
+        return self.add(BodyForce(acceleration=acceleration, loading_type=loading_type, name=name))
+
+    def add_translation(
+        self,
+        block: int,
+        dx: Optional[float] = None,
+        dy: Optional[float] = None,
+        dz: Optional[float] = None,
+        name: Optional[str] = None,
+    ) -> Translation:
+        """Prescribe a translation of a block, per component. See :class:`~compas_dem.problem.Translation`."""
+        return self.add(Translation(block=block, dx=dx, dy=dy, dz=dz, name=name))
+
+    def add_rotation(
+        self,
+        block: int,
+        rx: Optional[float] = None,
+        ry: Optional[float] = None,
+        rz: Optional[float] = None,
+        name: Optional[str] = None,
+    ) -> Rotation:
+        """Prescribe a rotation of a block about its centroid, per component. See :class:`~compas_dem.problem.Rotation`."""
+        return self.add(Rotation(block=block, rx=rx, ry=ry, rz=rz, name=name))
+
     @property
     def boundary_conditions(self) -> list:
         """Every boundary condition registered on this problem, in the order added."""
@@ -287,23 +349,28 @@ class Problem(Data):
                     if block is None:
                         continue
                     mesh = block.modelgeometry
-                    if bc.anchor == "vertex":
-                        if bc.anchor_index not in list(mesh.vertices()):
-                            print(f"Point load on block {bc.block} is anchored to vertex {bc.anchor_index}, which does not exist.{label(bc)}")
+                    if bc.anchor == "centroid":
+                        point = list(block.point)
+                    elif bc.anchor == "point":
+                        point = list(bc.anchor_value)
+                    elif bc.anchor == "vertex":
+                        if bc.anchor_value not in list(mesh.vertices()):
+                            print(f"Point load on block {bc.block} is anchored to vertex {bc.anchor_value}, which does not exist.{label(bc)}")
                             continue
-                        point = mesh.vertex_coordinates(bc.anchor_index)
+                        point = mesh.vertex_coordinates(bc.anchor_value)
                     else:
-                        if bc.anchor_index not in list(mesh.faces()):
-                            print(f"Point load on block {bc.block} is anchored to face {bc.anchor_index}, which does not exist.{label(bc)}")
+                        if bc.anchor_value not in list(mesh.faces()):
+                            print(f"Point load on block {bc.block} is anchored to face {bc.anchor_value}, which does not exist.{label(bc)}")
                             continue
-                        point = mesh.face_center(bc.anchor_index)
+                        point = mesh.face_center(bc.anchor_value)
                     force = Vector(*bc.force)
                     line = arrow(point, force, block_scale(block))
                     if line is None:
                         continue
+                    where = "centroid" if bc.anchor == "centroid" else f"{bc.anchor} {bc.anchor_value}"
                     loads_view.add(
                         line,
-                        name=f"Point Load: [{force.x:.1f}, {force.y:.1f}, {force.z:.1f}] at {bc.anchor} {bc.anchor_index} of block {bc.block}{label(bc)}",
+                        name=f"Point Load: [{force.x:.1f}, {force.y:.1f}, {force.z:.1f}] at {where} of block {bc.block}{label(bc)}",
                         linewidth=2.5,
                         linecolor=Color.red(),
                     )
@@ -356,6 +423,26 @@ class Problem(Data):
                         name=f"Body Force: [{vector.x:.2f}, {vector.y:.2f}, {vector.z:.2f}] m/s² ({bc.loading_type}){label(bc)}",
                         linewidth=2.5,
                         linecolor=Color.orange(),
+                    )
+
+            moments = of_type(Moment)
+            if moments:
+                # A couple has no line of action, so it is drawn along its own axis at
+                # the block centroid rather than as a force arrow.
+                moment_view = viewer.scene.add_group(name="Moments")
+                for bc in moments:
+                    block = resolve_block(bc, bc.block)
+                    if block is None:
+                        continue
+                    vector = Vector(*bc.moment)
+                    line = arrow(list(block.point), vector, block_scale(block))
+                    if line is None:
+                        continue
+                    moment_view.add(
+                        line,
+                        name=f"Moment: [{vector.x:.1f}, {vector.y:.1f}, {vector.z:.1f}] Nm about block {bc.block}{label(bc)}",
+                        linewidth=2.5,
+                        linecolor=Color.magenta(),
                     )
 
         if show_supports:

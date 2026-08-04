@@ -4,6 +4,7 @@ from compas_dem.problem.boundary_condition import LOADING_TYPES
 from compas_dem.problem.boundary_condition import BodyForce
 from compas_dem.problem.boundary_condition import Displacement
 from compas_dem.problem.boundary_condition import Load
+from compas_dem.problem.boundary_condition import Moment
 from compas_dem.problem.boundary_condition import PointLoad
 from compas_dem.problem.boundary_condition import Rotation
 from compas_dem.problem.boundary_condition import SurfaceLoad
@@ -39,16 +40,21 @@ def _anchor_point(block, load: PointLoad):
     ValueError
         If the anchored vertex or face does not exist on the block.
     """
+    if load.anchor == "centroid":
+        return list(block.point)
+    if load.anchor == "point":
+        return list(load.anchor_value)
+
     mesh = block.modelgeometry
     if load.anchor == "vertex":
         try:
-            return mesh.vertex_coordinates(load.anchor_index)
+            return mesh.vertex_coordinates(load.anchor_value)
         except KeyError:
-            raise ValueError(f"Point load on block {load.block} is anchored to vertex {load.anchor_index}, which does not exist on that block.") from None
+            raise ValueError(f"Point load on block {load.block} is anchored to vertex {load.anchor_value}, which does not exist on that block.") from None
     try:
-        return mesh.face_center(load.anchor_index)
+        return mesh.face_center(load.anchor_value)
     except KeyError:
-        raise ValueError(f"Point load on block {load.block} is anchored to face {load.anchor_index}, which does not exist on that block.") from None
+        raise ValueError(f"Point load on block {load.block} is anchored to face {load.anchor_value}, which does not exist on that block.") from None
 
 
 def resolve_centroidal_loads(model, boundary_conditions) -> dict:
@@ -118,8 +124,13 @@ def resolve_centroidal_loads(model, boundary_conditions) -> dict:
         elif isinstance(bc, PointLoad):
             block = require_block(bc.block, bc)
             force = Vector(*bc.force)
+            # A centroid anchor gives a zero lever arm, hence no moment.
             lever = Vector(*_anchor_point(block, bc)) - block.point
             accumulate(bc.block, force, lever.cross(force), bc.loading_type)
+
+        elif isinstance(bc, Moment):
+            require_block(bc.block, bc)
+            accumulate(bc.block, Vector(0, 0, 0), Vector(*bc.moment), bc.loading_type)
 
         elif isinstance(bc, SurfaceLoad):
             block = require_block(bc.block, bc)

@@ -3,7 +3,13 @@ from typing import Optional
 from compas.data import Data
 
 LOADING_TYPES = ("ramp", "instantaneous")
-ANCHORS = ("vertex", "face")
+
+#: Where a :class:`PointLoad` is applied on its block.
+#:
+#: ``"vertex"`` and ``"face"`` take an index into the block geometry, ``"point"`` takes
+#: explicit ``[x, y, z]`` coordinates, and ``"centroid"`` takes nothing. All four are
+#: resolved against the model at solve time.
+ANCHORS = ("vertex", "face", "point", "centroid")
 
 
 def check_loading_type(loading_type: str) -> str:
@@ -81,15 +87,24 @@ class Load(BoundaryCondition):
 
 
 class PointLoad(Load):
-    """A concentrated force applied at a vertex or a face centroid of a block.
+    """A concentrated force applied at a point on a block.
 
-    A point load is always anchored to a feature of the block geometry, never to the
-    block centroid: a force at the centroid produces no moment and is indistinguishable
-    from a :class:`BodyForce`. The eccentric moment about the centroid is computed at
-    solve time from the resolved anchor position.
+    The application point is stored symbolically — as an anchor kind plus a value —
+    and resolved against the model geometry at solve time, so a load can be built
+    without a model in hand. The equivalent moment about the block centroid follows
+    from the resolved position.
 
-    Use :meth:`at_vertex` or :meth:`at_face` rather than calling the constructor
-    directly.
+    Four anchors are available, one per factory method. Prefer the factories to the
+    constructor; they name the anchor for you and take the right argument type.
+
+    ==================  ====================================================
+    Factory             Application point
+    ==================  ====================================================
+    :meth:`at_vertex`   a vertex of the block geometry
+    :meth:`at_face`     the centroid of a face of the block
+    :meth:`at_point`    explicit ``[x, y, z]`` coordinates
+    :meth:`at_centroid` the block centroid, which induces no moment
+    ==================  ====================================================
 
     Parameters
     ----------
@@ -97,27 +112,41 @@ class PointLoad(Load):
         Graph node index of the target block.
     force : list[float]
         Force vector [fx, fy, fz] in [N].
-    anchor : str
-        ``"vertex"`` or ``"face"``.
-    anchor_index : int
-        Index of the vertex or face on the block, per ``anchor``.
+    anchor : str, optional
+        One of :data:`ANCHORS`. Default ``"centroid"``.
+    anchor_value : int | list[float] | None, optional
+        An index for ``"vertex"`` and ``"face"``, ``[x, y, z]`` for ``"point"``,
+        and ``None`` for ``"centroid"``.
     loading_type : str, optional
         See :class:`Load`.
     name : str, optional
         Name for this load.
 
+    Raises
+    ------
+    ValueError
+        If ``anchor_value`` does not match ``anchor``.
+
+    Notes
+    -----
+    A force at the block centroid produces no moment, which makes it equivalent to a
+    :class:`BodyForce` on that one block. It is offered because it is occasionally the
+    right idealisation, but anchoring to a vertex or a face is usually what is meant.
+
     Examples
     --------
     >>> PointLoad.at_vertex(block=10, vertex=5, force=[0, 0, -5000])
     PointLoad(block=10, force=[0, 0, -5000], at vertex 5)
+    >>> PointLoad.at_centroid(block=10, force=[0, 0, -5000])
+    PointLoad(block=10, force=[0, 0, -5000], at centroid)
     """
 
     def __init__(
         self,
         block: int,
         force: list,
-        anchor: str,
-        anchor_index: int,
+        anchor: str = "centroid",
+        anchor_value=None,
         loading_type: str = "ramp",
         name: Optional[str] = None,
     ) -> None:
@@ -125,10 +154,30 @@ class PointLoad(Load):
         self.block = block
         self.force = list(force)
         self.anchor = check_anchor(anchor)
-        self.anchor_index = anchor_index
+        self.anchor_value = self._check_anchor_value(self.anchor, anchor_value)
+
+    @staticmethod
+    def _check_anchor_value(anchor: str, value):
+        """Validate the anchor value against the anchor kind, returning it normalised."""
+        if anchor in ("vertex", "face"):
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError(f"A {anchor!r} anchor needs an integer index, got {value!r}.")
+            return value
+        if anchor == "point":
+            try:
+                coordinates = [float(v) for v in value]
+            except TypeError:
+                raise ValueError(f"A 'point' anchor needs [x, y, z] coordinates, got {value!r}.") from None
+            if len(coordinates) != 3:
+                raise ValueError(f"A 'point' anchor needs [x, y, z] coordinates, got {value!r}.")
+            return coordinates
+        if value is not None:
+            raise ValueError(f"A 'centroid' anchor takes no value, got {value!r}.")
+        return None
 
     def __repr__(self) -> str:
-        return f"PointLoad(block={self.block}, force={self.force}, at {self.anchor} {self.anchor_index})"
+        where = "at centroid" if self.anchor == "centroid" else f"at {self.anchor} {self.anchor_value}"
+        return f"PointLoad(block={self.block}, force={self.force}, {where})"
 
     @property
     def __data__(self) -> dict:
@@ -136,7 +185,7 @@ class PointLoad(Load):
             "block": self.block,
             "force": self.force,
             "anchor": self.anchor,
-            "anchor_index": self.anchor_index,
+            "anchor_value": self.anchor_value,
             "loading_type": self.loading_type,
         }
 
@@ -161,7 +210,7 @@ class PointLoad(Load):
         -------
         :class:`PointLoad`
         """
-        return cls(block=block, force=force, anchor="vertex", anchor_index=vertex, loading_type=loading_type, name=name)
+        return cls(block=block, force=force, anchor="vertex", anchor_value=vertex, loading_type=loading_type, name=name)
 
     @classmethod
     def at_face(cls, block: int, face: int, force: list, loading_type: str = "ramp", name: Optional[str] = None) -> "PointLoad":
@@ -184,7 +233,103 @@ class PointLoad(Load):
         -------
         :class:`PointLoad`
         """
-        return cls(block=block, force=force, anchor="face", anchor_index=face, loading_type=loading_type, name=name)
+        return cls(block=block, force=force, anchor="face", anchor_value=face, loading_type=loading_type, name=name)
+
+    @classmethod
+    def at_point(cls, block: int, point: list, force: list, loading_type: str = "ramp", name: Optional[str] = None) -> "PointLoad":
+        """Apply a concentrated force at explicit coordinates on a block.
+
+        The point is taken as given; it is not projected onto the block geometry, and
+        nothing checks that it lies on or inside the block. The lever arm to the block
+        centroid follows from it directly.
+
+        Parameters
+        ----------
+        block : int
+            Graph node index of the target block.
+        point : list[float]
+            Application point [x, y, z] in model coordinates.
+        force : list[float]
+            Force vector [fx, fy, fz] in [N].
+        loading_type : str, optional
+            See :class:`Load`.
+        name : str, optional
+            Name for this load.
+
+        Returns
+        -------
+        :class:`PointLoad`
+        """
+        return cls(block=block, force=force, anchor="point", anchor_value=point, loading_type=loading_type, name=name)
+
+    @classmethod
+    def at_centroid(cls, block: int, force: list, loading_type: str = "ramp", name: Optional[str] = None) -> "PointLoad":
+        """Apply a concentrated force at the centroid of a block.
+
+        Induces no moment, since the lever arm is zero.
+
+        Parameters
+        ----------
+        block : int
+            Graph node index of the target block.
+        force : list[float]
+            Force vector [fx, fy, fz] in [N].
+        loading_type : str, optional
+            See :class:`Load`.
+        name : str, optional
+            Name for this load.
+
+        Returns
+        -------
+        :class:`PointLoad`
+        """
+        return cls(block=block, force=force, anchor="centroid", anchor_value=None, loading_type=loading_type, name=name)
+
+
+class Moment(Load):
+    """A concentrated couple applied to a block about its centroid.
+
+    A pure moment with no net force. Not reachable through :class:`PointLoad`, whose
+    moment is always the consequence of an eccentric force.
+
+    Parameters
+    ----------
+    block : int
+        Graph node index of the target block.
+    moment : list[float]
+        Moment vector [mx, my, mz] in [Nm].
+    loading_type : str, optional
+        See :class:`Load`.
+    name : str, optional
+        Name for this load.
+
+    Examples
+    --------
+    >>> Moment(block=10, moment=[0, 5000, 0])
+    Moment(block=10, moment=[0, 5000, 0])
+    """
+
+    def __init__(
+        self,
+        block: int,
+        moment: list,
+        loading_type: str = "ramp",
+        name: Optional[str] = None,
+    ) -> None:
+        super().__init__(loading_type=loading_type, name=name)
+        self.block = block
+        self.moment = list(moment)
+
+    def __repr__(self) -> str:
+        return f"Moment(block={self.block}, moment={self.moment})"
+
+    @property
+    def __data__(self) -> dict:
+        return {
+            "block": self.block,
+            "moment": self.moment,
+            "loading_type": self.loading_type,
+        }
 
 
 class SurfaceLoad(Load):
