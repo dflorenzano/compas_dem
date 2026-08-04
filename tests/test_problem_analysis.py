@@ -298,20 +298,37 @@ def test_solving_without_a_contact_model_is_rejected(unit_boxes):
         problem.solve()
 
 
-def test_cra_refuses_boundary_conditions_it_cannot_apply(unit_boxes):
-    """CRA and RBE resolve self-weight only; dropping loads silently would lie."""
-    problem = Problem(unit_boxes)
-    problem.add(PointLoad.at_vertex(block=0, vertex=0, force=[0, 0, -1000]))
-    problem.set_contact_model("MohrCoulomb", mu=0.6)
-    problem.set_solver(Solver.CRA())
-    with pytest.raises(ValueError, match="cannot apply the boundary conditions"):
-        problem.solve()
-
-
-def test_rbe_refuses_boundary_conditions_it_cannot_apply(unit_boxes):
+@pytest.mark.parametrize("solver_name", ["CRA", "RBE"])
+def test_cra_rbe_refuse_prescribed_movements(unit_boxes, solver_name):
+    """Support blocks have no displacement DOF in the CRA formulation, so a
+    prescribed settlement is not expressible. Loads are fine -- see the
+    integration tests."""
     problem = Problem(unit_boxes)
     problem.add(Translation(block=0, dx=0.1))
     problem.set_contact_model("MohrCoulomb", mu=0.6)
-    problem.set_solver(Solver.RBE())
-    with pytest.raises(ValueError, match="cannot apply the boundary conditions"):
+    problem.set_solver(getattr(Solver, solver_name)())
+    with pytest.raises(ValueError, match="cannot apply prescribed movements"):
         problem.solve()
+
+
+@pytest.mark.parametrize("solver_name", ["CRA", "RBE"])
+def test_cra_rbe_accept_loads(unit_boxes, solver_name, monkeypatch):
+    """Loads no longer raise; they are passed through to compas_cra as `loads=`."""
+    problem = Problem(unit_boxes)
+    problem.add(PointLoad.at_vertex(block=0, vertex=0, force=[0, 0, -1000]))
+    problem.set_contact_model("MohrCoulomb", mu=0.6)
+    problem.set_solver(getattr(Solver, solver_name)())
+
+    seen = {}
+
+    def fake_backend(assembly, **kwargs):
+        seen.update(kwargs)
+        return assembly
+
+    target = "_rbe_backend" if solver_name == "RBE" else "_cra_backend"
+    monkeypatch.setattr(f"compas_dem.analysis.cra.{target}", fake_backend)
+    monkeypatch.setattr("compas_dem.analysis.cra._post_processing_cra", lambda *a, **kw: Results(model_id="m", problem_id="p"))
+
+    problem.solve()
+    assert "loads" in seen, "the load dict was not forwarded to compas_cra"
+    assert seen["loads"], "the load dict reached compas_cra but was empty"

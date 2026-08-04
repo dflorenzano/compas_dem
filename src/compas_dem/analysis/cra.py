@@ -22,6 +22,7 @@ except ImportError as exc:
     raise ImportError(f"The CRA / RBE solvers could not be loaded: {exc}. If compas_cra itself is missing, install it; otherwise install the dependency named above.") from exc
 
 import compas.geometry as cg
+from compas_dem.analysis.resolve import resolve_centroidal_loads
 from compas_dem.interactions import FrictionContact
 from compas_dem.interactions.contact import local_resultant
 from compas_dem.models import BlockModel
@@ -202,27 +203,57 @@ def _resolve_mu(problem: Problem, mu: Optional[float]) -> float:
         raise ValueError("No friction coefficient provided and no contact model in the problem.")
 
 
-def _reject_unsupported_boundary_conditions(problem: Problem) -> None:
-    """Refuse to solve a problem carrying boundary conditions CRA/RBE cannot apply.
+def _reject_prescribed_displacements(problem: Problem) -> None:
+    """Refuse to solve a problem carrying prescribed movements.
 
-    CRA and RBE are limited-equilibrium solvers: they resolve self-weight against
-    contact forces and have no mechanism for applied loads or prescribed movements.
-    Silently dropping them would return a plausible-looking result for a different
-    problem than the one that was set up, so refuse instead.
+    CRA and RBE solve for the displacements of the free blocks; support blocks are
+    excluded from the system entirely and have no displacement degrees of freedom, so
+    a prescribed settlement is not expressible in the formulation. Applied loads *are*
+    supported -- see :func:`_centroidal_loads_for_cra`.
 
     Raises
     ------
     ValueError
-        If any boundary condition is registered on the problem.
+        If any Displacement is registered on the problem.
     """
-    if not problem.boundary_conditions:
+    if not problem.displacements:
         return
-    kinds = sorted({type(bc).__name__ for bc in problem.boundary_conditions})
+    kinds = sorted({type(bc).__name__ for bc in problem.displacements})
     raise ValueError(
-        f"The CRA and RBE solvers apply self-weight only, and cannot apply the boundary conditions on this problem ({', '.join(kinds)}). "
-        "Solve this problem with Solver.LMGC90(...), Solver.PRD(...) or Solver.BLA(...), "
-        "or build a separate self-weight-only problem for CRA."
+        f"The CRA and RBE solvers cannot apply prescribed movements ({', '.join(kinds)}): support blocks are excluded "
+        "from the equilibrium system and have no displacement degrees of freedom. "
+        "Solve this problem with Solver.LMGC90(...), Solver.PRD(...) or Solver.BLA(...)."
     )
+
+
+def _centroidal_loads_for_cra(problem: Problem, model: BlockModel, assembly: Assembly, density: float) -> dict:
+    """Resolve the problem's loads into the scaled units compas_cra works in.
+
+    compas_cra builds its external force vector as ``volume * density`` rather than a
+    force, and :func:`_post_processing_cra` scales the result back up by
+    ``density * 9.81``. Applied loads are real forces in [N], so they have to come down
+    by that same factor to be superposed consistently.
+
+    Returns
+    -------
+    dict
+        ``{assembly_node_key: [fx, fy, fz, mx, my, mz]}``, ready for compas_cra.
+    """
+    loads = resolve_centroidal_loads(model, problem.boundary_conditions)
+    scale = density * 9.81
+    graphnode_to_node = {assembly.graph.node_attribute(node, "graphnode"): node for node in assembly.graph.nodes()}
+
+    scaled = {}
+    for graphnode, entry in loads.items():
+        force = list(entry["force"])
+        moment = list(entry["moment"])
+        if not any(force) and not any(moment):
+            continue
+        node = graphnode_to_node.get(graphnode)
+        if node is None:
+            continue
+        scaled[node] = [component / scale for component in force + moment]
+    return scaled
 
 
 def _resolve_density(model: BlockModel, density: Optional[float]) -> float:
@@ -266,12 +297,13 @@ def rbe_solve(
     -------
     :class:`~compas_dem.problem.Results`
     """
-    _reject_unsupported_boundary_conditions(problem)
+    _reject_prescribed_displacements(problem)
     mu = _resolve_mu(problem, mu)
     density = _resolve_density(model, density)
 
     assembly = _blockmodel_to_assembly(model)
-    _rbe_backend(assembly, mu=mu, density=1.0, verbose=verbose, timer=timer)
+    loads = _centroidal_loads_for_cra(problem, model, assembly, density)
+    _rbe_backend(assembly, mu=mu, density=1.0, verbose=verbose, timer=timer, loads=loads)
 
     results = _post_processing_cra(assembly, problem, model, density=density)
     results.metadata["mu"] = mu
@@ -323,7 +355,7 @@ def cra_solve(
     -------
     :class:`~compas_dem.problem.Results`
     """
-    _reject_unsupported_boundary_conditions(problem)
+    _reject_prescribed_displacements(problem)
 
     options = dict(DEFAULT_IPOPT_OPTIONS)
     options.update(ipopt_options or {})
@@ -333,9 +365,11 @@ def cra_solve(
 
     assembly = _blockmodel_to_assembly(model)
 
+    loads = _centroidal_loads_for_cra(problem, model, assembly, density)
+
     backend = _cra_penalty_backend if penalty else _cra_backend
     with _ipopt_options(options):
-        backend(assembly, mu=mu, density=1.0, d_bnd=d_bnd, eps=eps, verbose=verbose, timer=timer)
+        backend(assembly, mu=mu, density=1.0, d_bnd=d_bnd, eps=eps, verbose=verbose, timer=timer, loads=loads)
 
     results = _post_processing_cra(assembly, problem, model, density=density)
     results.metadata["mu"] = mu

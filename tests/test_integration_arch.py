@@ -16,6 +16,7 @@ from compas_dem.material import Stone
 from compas_dem.models import Analysis
 from compas_dem.models import BlockModel
 from compas_dem.problem import BodyForce
+from compas_dem.problem import Moment
 from compas_dem.problem import PointLoad
 from compas_dem.problem import Problem
 from compas_dem.problem import Solver
@@ -88,15 +89,74 @@ def test_analysis_owns_results_and_survives_a_roundtrip(arch, tmp_path):
 
 
 @needs_ipopt
-def test_cra_refuses_an_arch_carrying_loads(arch):
-    """The BC demo script solved this exact setup with CRA and silently lost the loads."""
-    problem = Problem(arch, name="ULS")
-    problem.add(PointLoad.at_face(block=5, face=2, force=[0, 0, -100000]))
+def test_cra_refuses_an_arch_carrying_a_prescribed_movement(arch):
+    problem = Problem(arch, name="settlement")
+    problem.add(Translation(block=0, dx=-0.01))
     problem.set_contact_model("MohrCoulomb", mu=0.6)
     problem.set_solver(Solver.CRA())
 
-    with pytest.raises(ValueError, match="cannot apply the boundary conditions"):
+    with pytest.raises(ValueError, match="cannot apply prescribed movements"):
         problem.solve()
+
+
+@needs_ipopt
+@pytest.mark.parametrize("solver_name", ["CRA", "RBE"])
+def test_applied_load_changes_the_support_reactions(arch, solver_name):
+    """The physical check: a vertical point load must show up 1:1 in the reactions.
+
+    The BC demo script solved this setup with CRA and silently lost the load.
+    """
+    import numpy as np
+
+    def vertical_reaction(problem):
+        results = problem.solve()
+        supports = {b.graphnode for b in arch.supports()}
+        return sum(
+            abs(np.array(results.resultant_global(e), dtype=float)[2])
+            for e in results.edges()
+            if (e[0] in supports) != (e[1] in supports)
+        )
+
+    baseline = Problem(arch, name="self-weight")
+    baseline.set_contact_model("MohrCoulomb", mu=0.6)
+    baseline.set_solver(getattr(Solver, solver_name)())
+    before = vertical_reaction(baseline)
+
+    load = 2000.0
+    loaded = Problem(arch, name="loaded")
+    loaded.add(PointLoad.at_centroid(block=5, force=[0, 0, -load]))
+    loaded.set_contact_model("MohrCoulomb", mu=0.6)
+    loaded.set_solver(getattr(Solver, solver_name)())
+    after = vertical_reaction(loaded)
+
+    assert after - before == pytest.approx(load, rel=0.02)
+
+
+@needs_ipopt
+def test_a_pure_couple_does_not_change_the_reactions(arch):
+    """A Moment has no net force, so vertical equilibrium must be untouched."""
+    import numpy as np
+
+    def vertical_reaction(problem):
+        results = problem.solve()
+        supports = {b.graphnode for b in arch.supports()}
+        return sum(
+            abs(np.array(results.resultant_global(e), dtype=float)[2])
+            for e in results.edges()
+            if (e[0] in supports) != (e[1] in supports)
+        )
+
+    baseline = Problem(arch)
+    baseline.set_contact_model("MohrCoulomb", mu=0.6)
+    baseline.set_solver(Solver.CRA())
+    before = vertical_reaction(baseline)
+
+    couple = Problem(arch)
+    couple.add(Moment(block=5, moment=[0, 500, 0]))
+    couple.set_contact_model("MohrCoulomb", mu=0.6)
+    couple.set_solver(Solver.CRA())
+
+    assert vertical_reaction(couple) == pytest.approx(before, rel=1e-3)
 
 
 @needs_lmgc90
