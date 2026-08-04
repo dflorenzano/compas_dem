@@ -9,8 +9,9 @@ from compas_dem.problem.results import Results
 try:
     from compas_bla.core import BLAModel
     from compas_bla.viz.helpers import deformed_contacts
-except ImportError:
-    raise ImportError("compas_bla is not installed. Install it locally to use the BLA solver.")
+except ImportError as exc:
+    # Report the real error: the failing import is not necessarily compas_bla itself.
+    raise ImportError(f"The BLA solver could not be loaded: {exc}. If compas_bla itself is missing, install it locally; otherwise install the dependency named above.") from exc
 
 
 def bla_solve(

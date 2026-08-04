@@ -8,8 +8,9 @@ from compas_dem.problem.results import Results
 
 try:
     from compas_pr3d.prd import PR3DModel
-except ImportError:
-    raise ImportError("compas_pr3d is not installed. Install it locally to use the PRD solver.")
+except ImportError as exc:
+    # Report the real error: the failing import is not necessarily compas_pr3d itself.
+    raise ImportError(f"The PRD solver could not be loaded: {exc}. If compas_pr3d itself is missing, install it locally; otherwise install the dependency named above.") from exc
 
 
 def prd_solve(

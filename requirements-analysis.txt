@@ -1,4 +1,10 @@
 compas_assembly
-compas_cra
+# PyPI stops at 0.4.0; 0.5.0 (COMPAS 2 samples, compas_viewer) is tag-only on GitHub.
+compas_cra @ git+https://github.com/BlockResearchGroup/compas_cra@v0.5.0
 compas_gmsh
 compas_lmgc90
+# Optional dependency of pyomo, which compas_cra imports. Normally lazy, but importing
+# compas_viewer first installs a PySide6 import hook that forces pyomo's lazy proxies to
+# resolve, so a missing matplotlib breaks every CRA/RBE run launched from a script that
+# imports the viewer -- which is all of them.
+matplotlib

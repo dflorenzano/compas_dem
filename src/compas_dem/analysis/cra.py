@@ -12,8 +12,14 @@ try:
     from compas_cra.equilibrium import cra_penalty_solve as _cra_penalty_backend
     from compas_cra.equilibrium import cra_solve as _cra_backend
     from compas_cra.equilibrium import rbe_solve as _rbe_backend
-except ImportError:
-    raise ImportError("compas_cra is not installed. Install it to use the CRA / RBE solvers.")
+except ImportError as exc:
+    # Do not assume the cause. compas_cra pulls in pyomo, whose optional dependencies
+    # are lazy proxies; importing compas_viewer first installs a PySide6 import hook
+    # that calls inspect.unwrap on every new module, which forces those proxies to
+    # resolve. A missing optional dependency of pyomo then surfaces here as a
+    # DeferredImportError -- a subclass of ImportError -- and reporting it as
+    # "compas_cra is not installed" sends you looking in the wrong place.
+    raise ImportError(f"The CRA / RBE solvers could not be loaded: {exc}. If compas_cra itself is missing, install it; otherwise install the dependency named above.") from exc
 
 import compas.geometry as cg
 from compas_dem.interactions import FrictionContact
