@@ -1,5 +1,6 @@
 from compas_dem.material import Stone
 from compas_dem.models import BlockModel
+from compas_dem.problem import PointLoad
 from compas_dem.problem import Problem
 from compas_dem.problem import Solver
 from compas_dem.templates import ArchTemplate
@@ -48,20 +49,20 @@ model.assign_material(generic, elements=list(model.elements()))
 
 problem = Problem(model)
 problem.set_contact_model("MohrCoulomb", phi=35, c=0.0)
-
-# problem.add(PointLoad.at_face(block=16, face=4, force=[0, 0, -100000]))
+problem.set_solver(Solver.LMGC90())
+problem.add(PointLoad.at_face(block=16, face=4, force=[0, 0, -100000]))
 # lmgc90_1: Solver = Solver.LMGC90(dt=0.00056, duration=10.0, urf_threshold=1e-3, theta=0.7)
-# lmgc90_2: Solver = Solver.LMGC90(dt=0.001, duration=1.0, urf_threshold=1e-3, theta=0.7)
-prd: Solver = Solver.BLA()
+lmgc90_2: Solver = Solver.LMGC90(dt=0.001, duration=1.0, urf_threshold=1e-3, theta=0.7)
+# prd: Solver = Solver.BLA()
 # Solve using either lmgc90_1 or lmgc90_2; same solver, with different parameters.
-problem.set_solver(prd)
+# problem.set_solver(prd)
 result = problem.solve()
+result.displacement_scale = 1
 result_prd = result.copy()
 # =============================================================================
-# Viz
 # =============================================================================
 
 viewer = DEMViewer(model)
 
-viewer.add_solution(result_prd, name="PRD", scale=0.5)
+viewer.add_solution(result_prd, name="LMGC90", scale=0.5)
 viewer.show()
