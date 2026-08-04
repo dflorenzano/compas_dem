@@ -370,7 +370,11 @@ class DEMViewer(Viewer):
                         continue
 
                     support_contacts.add(
-                        contact_polygon.to_brep(),
+                        # Drawn as a polygon, not a Brep: Polygon.to_brep() needs a Brep
+                        # backend plugin, which Rhino provides but a standalone install
+                        # does not unless compas_occ is present. compas_viewer renders a
+                        # Polygon natively, so this works in both.
+                        contact_polygon,
                         name=f"contact_polygon_{edge}",
                         color=Color.brown(),
                         opacity=0.5,
@@ -487,7 +491,9 @@ class DEMViewer(Viewer):
                 continue
 
             obj = face_contacts.add(
-                contact_polygon.to_brep(),
+                # See the note on the support contact polygon above: no Brep backend
+                # is required this way.
+                contact_polygon,
                 name=f"contact_polygon_{edge}",
                 color=Color.green(),
                 opacity=0.5,
