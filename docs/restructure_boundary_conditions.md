@@ -19,10 +19,19 @@ explicitly.
 | `db880ab` | LMGC90 constructor fixed for compas_lmgc90 0.1.9 (§11.3) |
 | `8b73d4c` | Viewer draws contact polygons without a Brep backend (§11.4) |
 | `d455f26` | Restore every load type; add `Problem` convenience helpers (§6.2, §6.5) |
+| `72e1c78` | Report update |
+| `046dbf4` | **CRA and RBE now apply loads** (§12) |
 
-**Two things to read first if time is short:** §5.1 (CRA/RBE silently discard boundary
-conditions — the one real correctness hole, still open) and §11 (five bugs that were
-already on `main` and blocked every solver from running outside Rhino).
+Plus one commit in a second repository — see §12:
+
+| Repo | Branch | Commit |
+|---|---|---|
+| `dflorenzano/compas_cra` (fork of BRG) | `feature/external-loads` | `998a24a` — pushed to the fork, **no PR opened** |
+
+**Two things to read first if time is short:** §12 (CRA and RBE now apply loads — this
+closes the branch's one real correctness hole, and needs a decision about upstreaming)
+and §11 (five bugs that were already on `main` and blocked every solver from running
+outside Rhino).
 
 ---
 
@@ -43,8 +52,10 @@ dead ends: `set_solve_order`, `add_boundary_condition`, `load_model`, and the
 
 Two things turned up that were **not** in the brief and are more serious than API smell:
 
-1. **CRA and RBE silently discard every boundary condition** (§5.1) — a wrong answer
-   returned without warning. **Still open**; they now refuse rather than mislead.
+1. **CRA and RBE silently discarded every boundary condition** (§5.1) — a wrong answer
+   returned without warning. **Now fixed** (§12): they apply loads for real, via a small
+   additive change to compas_cra that still needs upstreaming. Prescribed displacements
+   remain structurally impossible there and are refused explicitly.
 2. **`bc.g` was a lie** — no solver ever read it (§5.2).
 
 And separately, **five environment/compatibility bugs already on `main`** meant no solver
@@ -330,17 +341,17 @@ Consequence in your own repo: `DEM_Boundary_Conditions_Demo.py` set up a 0.5 m
 settlement, three surface loads and a 100 kN point load, solved with CRA, and plotted
 `result_cra` beside `result_lmgc90`. The CRA result was self-weight alone. Nothing warned.
 
-**What I did:** added `_reject_unsupported_boundary_conditions(problem)` at the top of
-both `cra_solve` and `rbe_solve`. A problem carrying any BC now raises, naming the types:
+**First response:** made both solvers refuse rather than mislead, so a problem carrying
+boundary conditions raised instead of silently returning a self-weight answer.
 
-> `The CRA and RBE solvers apply self-weight only, and cannot apply the boundary
-> conditions on this problem (PointLoad, SurfaceLoad, Translation). Solve this problem
-> with Solver.LMGC90(...), Solver.PRD(...) or Solver.BLA(...), or build a separate
-> self-weight-only problem for CRA.`
+**Then fixed properly — see §12.** CRA and RBE now apply loads for real, via a small
+additive change to compas_cra. The guard survives only for *prescribed displacements*,
+which are structurally impossible in the formulation.
 
-**What I did NOT do:** teach CRA to apply loads. That is a solver change across the
-compas_cra backend, out of scope for an API refactor, and it should be a deliberate
-decision with Baraa. **This is the highest-value open item.**
+> `The CRA and RBE solvers cannot apply prescribed movements (Translation): support
+> blocks are excluded from the equilibrium system and have no displacement degrees of
+> freedom. Solve this problem with Solver.LMGC90(...), Solver.PRD(...) or
+> Solver.BLA(...).`
 
 ### 5.2 `bc.g` was dead and actively misleading
 
@@ -822,13 +833,105 @@ runs without a Brep backend.
 
 ---
 
-## 12. Open items
+## 12. CRA and RBE now apply loads *(2026-08-04)* — **needs a decision**
+
+§5.1 recorded that CRA and RBE silently discard every boundary condition. That is now
+fixed, and the fix required a change in **compas_cra**, not in compas_dem. This section
+is the main thing to discuss.
+
+### Why it turned out to be small
+
+The hook already existed. `external_force_setup()` builds a per-block **6-vector**
+`[fx, fy, fz, mx, my, mz]`, and the equilibrium constraint is literally `A_eq · f = -p`.
+compas_cra only ever populated `p[2]`, with self-weight. Every other slot was zero and
+unused.
+
+compas_dem's `resolve_centroidal_loads()` already returns exactly
+`{block: {"force", "moment"}}`. **The data structures already matched** — this was an
+addition into `p`, not a reformulation of anything.
+
+### What changed in compas_cra
+
+Branch `feature/external-loads` on `dflorenzano/compas_cra`, commit `998a24a`, rebased
+onto current BRG `main`. **Pushed to the fork only; no pull request has been opened.**
+
+```python
+external_force_setup(assembly, density, loads=None)
+cra_solve(assembly, ..., loads=None)
+cra_penalty_solve(assembly, ..., loads=None)
+rbe_solve(assembly, ..., loads=None)
+```
+
+`loads` is `{node_key: [fx, fy, fz, mx, my, mz]}`, superposed on self-weight. Shorter
+sequences are zero-padded, so `[fx, fy, fz]` is a force with no moment. Loads on support
+blocks are ignored — supports are excluded from the equilibrium system, so anything
+applied to them is absorbed. Unknown node keys and over-long vectors raise.
+
+Also removed a stray `print` of the block density that emitted one line per block on
+every solve — that was the `1.0 1.0 1.0 …` noise in every CRA run.
+
+11 new tests in `tests/test_external_loads.py`; 15/15 pass with no regressions.
+
+### What changed in compas_dem
+
+`_centroidal_loads_for_cra()` converts our loads into compas_cra's units. compas_cra
+works in a scaled system — its force vector holds `volume × density`, not a force, and
+`_post_processing_cra` scales the result back up by `density × 9.81`. Applied loads are
+real newtons, so they are divided by that same factor going in.
+
+The guard narrows from *"cannot apply the boundary conditions"* to *"cannot apply
+prescribed movements"*.
+
+### Displacements are still impossible, and that is structural
+
+Not an oversight. `free_nodes()` excludes every `is_support` block, and the displacement
+variable is sized `free_num * 6` — **support blocks have no displacement degrees of
+freedom in the formulation at all**. A support settlement cannot be expressed without
+restructuring the free/fixed partition, which changes the problem class rather than
+patching it. Settlement stays with LMGC90, PRD and BLA.
+
+### Verification
+
+On a 20-block arch, self-weight reactions 27.580 kN:
+
+| Case | Reactions | Delta | Expected |
+|---|---|---|---|
+| CRA + 2 kN point load | 29.580 kN | **+2.000** | +2.000 |
+| RBE + 2 kN point load | 29.580 kN | **+2.000** | +2.000 |
+| CRA + eccentric load (face anchor) | 29.580 kN | +2.000 | +2.000 |
+| CRA + pure couple | 27.580 kN | **−0.0000** | 0 — no net force |
+| CRA + prescribed movement | — | raises | rejected |
+
+In compas_cra's own unit-cube test: 0.25 per corner under self-weight, 0.5 with an equal
+load applied, on both `cra_solve` and `rbe_solve`.
+
+### For discussion
+
+1. **Should this go upstream to BRG?** The change is additive and backward-compatible —
+   omitting `loads` reproduces the previous behaviour exactly, and a test asserts it.
+   Baraa's own compas_cra work is already merged upstream (BRG PR #9), so the path is
+   established.
+2. **Until it lands, compas_dem depends on an unreleased branch.** Options: pin
+   `requirements-analysis.txt` at the fork branch, vendor the ~30 lines, or keep the
+   guard and treat CRA loads as opt-in. See §13.
+3. **PRD and BLA already applied loads.** Only CRA/RBE were missing it, because the two
+   come from compas_cra rather than from compas_dem's own resolver.
+4. **A related pre-existing bug:** `_resolve_density` takes the *first* block's density
+   and scales the whole model by it, so mixed-density models are already mis-scaled in
+   the CRA path, independent of loads. compas_cra exports `density_setup()` for per-block
+   densities and compas_dem does not use it.
+
+---
+
+## 13. Open items
 
 ### Needs a decision with Baraa
 
-1. **CRA/RBE cannot apply loads** (§5.1). They now refuse instead of returning a result for
-   a different problem, but the underlying gap is real and unfixed. Implementing it is a
-   change to the compas_cra backend, not to this API. **Highest value item on the list.**
+1. **Upstream the compas_cra `loads` change** (§12). CRA and RBE now apply loads, but the
+   change lives on `dflorenzano/compas_cra:feature/external-loads` with **no PR opened**.
+   Until it lands, compas_dem depends on an unreleased branch: either pin
+   `requirements-analysis.txt` at the fork, vendor the ~30 lines, or gate CRA loads
+   behind a capability check. **Decide this first.**
 2. **`Gravity` deleted, not just `g`** (§6.1). The one knowing departure from the reviewed
    class list. If it comes back, the honest version makes self-weight opt-in — four
    backends to edit, and it silently changes results for every script that never added
