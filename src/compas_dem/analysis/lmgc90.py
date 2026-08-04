@@ -155,8 +155,9 @@ def lmgc90_solve(
             disp["translation"] = [0.0 if v is None else v for v in (disp["translation"] or [None, None, None])]
             disp["rotation"] = [0.0 if v is None else v for v in (disp["rotation"] or [None, None, None])]
 
-    solver = Solver(density=density, dt=dt, theta=theta)
-    solver.geometry_from_model(model)
+    # compas_lmgc90 >= 0.1.9 takes the model in the constructor and converts it there;
+    # the separate geometry_from_model() step it replaced no longer exists.
+    solver = Solver(model, density=density, dt=dt, theta=theta)
 
     # The solver identifies blocks by their position in insertion order (the order
     # model.elements() yields them), while loads and BCs are keyed by graph node,
