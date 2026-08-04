@@ -250,6 +250,28 @@ class; `problem.py` shrank by a third.
 local `_resolve_mu` / `_resolve_density`. Only `lmgc90.py:143`, `prd.py:60` and
 `bla.py:69` read boundary conditions.
 
+**History check.** `git log --all -S"resolve_centroidal_loads" -- src/compas_dem/analysis/cra.py`
+returns nothing: **no commit has ever applied loads in CRA or RBE.** This is not a
+regression introduced by `6e5dd23` or by this branch.
+
+Displacements are a narrower story. Before `6e5dd23`, `cra.py` did call
+`resolve_centroidal_displacements`, but only inside a helper called `_mark_supports`:
+
+```python
+if all(v == 0.0 for v in t) and all(v == 0.0 for v in r):
+    block.is_support = True
+```
+
+It read **zero-valued** movements only, to infer `is_support` — the back half of the old
+`add_supports_from_model` round-trip (supports on the model → promoted to zero-displacement
+BC entries → converted back to `is_support` for the assembly). A non-zero settlement was
+ignored then too. Baraa deleted both halves in `6e5dd23`, correctly: the assembly reads
+`element.is_support` directly (`cra.py:86`). Nothing was lost.
+
+**Migration note:** prescribing a zero displacement used to be the idiom for "this block is
+a support". Under the new API that raises via the guard below. Use
+`model.add_support(block_index=...)` instead.
+
 Consequence in your own repo: `DEM_Boundary_Conditions_Demo.py` set up a 0.5 m
 settlement, three surface loads and a 100 kN point load, solved with CRA, and plotted
 `result_cra` beside `result_lmgc90`. The CRA result was self-weight alone. Nothing warned.
@@ -304,6 +326,24 @@ The brief asked whether this was an accident. It was not. Supports live on the m
 solvers read `block.is_support` directly (`cra.py:86`, `lmgc90.py:149`); nothing needed
 them on `Problem`. **But** it was still *called* in 6 places (3 workflow scripts + 3 docs
 files), so those were broken.
+
+### 5.5b `_resolve_mu` stopped defaulting to 0.6 in `6e5dd23` — plugin-visible
+
+Not this branch, but easily mistaken for it when CRA "stops working" in Rhino. Baraa
+changed the fallback in `cra.py`:
+
+```python
+-    if problem.contact_properties.contact_model:
++    elif problem.contact_properties.contact_model:
+         return problem.contact_properties.contact_model.mu
+-    return 0.6
++    else:
++        raise ValueError("No friction coefficient provided and no contact model in the problem.")
+```
+
+A CRA or RBE solve with no contact model previously ran with `mu=0.6`; it now raises. The
+plugin has 2 `add_contact_model` call sites, so any path that reached a solve without one
+worked before `6e5dd23` and fails after. Independent of the boundary-condition guard.
 
 ### 5.6 `scripts/DEM_Analysis_workflow/` was already dead before this branch
 
