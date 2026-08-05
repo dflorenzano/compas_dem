@@ -71,7 +71,7 @@ def lmgc90_solve(
     urf_threshold: float = None,
     track_block: int = None,
     verbose: int = 0,
-) -> Solver:
+) -> Results:
     """
     Translate a Problem into a configured LMGC90 Solver. Run the simulation and
     post-process results back into the BlockModel in-place.
@@ -92,10 +92,16 @@ def lmgc90_solve(
         Time-integration parameter. Default ``0.7``.
     urf_threshold : float, optional
         Unbalanced Force Ratio convergence threshold.
+    track_block : int, optional
+        Index of a block whose displacement is recorded at every step.
+    verbose : int, optional
+        Progress-print interval, in steps. ``0`` (the default) is silent.
+        It does **not** affect what is recorded: the force history is sampled
+        every step regardless.
 
     Returns
     -------
-    :class:`compas_lmgc90.solver.Solver`
+    :class:`~compas_dem.problem.Results`
     """
 
     given = sum(x is not None for x in [duration, n_steps, dt])
@@ -274,12 +280,19 @@ def lmgc90_solve(
                     print(f"Converged at step {step} (UFR = {urf:.2e} < {urf_threshold:.2e}). Stopping early.")
                     break
 
-        elif step % verbose == 0:
+        elif verbose and step % verbose == 0:
             print(f"Completed step {step}/{n_steps}...")
 
-        if step % verbose == 0:
-            result = solver.last_result
-            force_time.append([result.interaction_force_magnitude[i] for i in range(len(result.interaction_bodies))])
+        # Sampled unconditionally: force_time is result data, not logging, and it
+        # used to share `verbose`'s modulus. That coupled two unrelated things and
+        # broke both. `verbose=0` — this function's own default, and what the Rhino
+        # plugin sends for "Quiet" — raised ZeroDivisionError on step 0, before
+        # anything was solved; and the `Solver.LMGC90` default of 1000 silently
+        # recorded a single sample for a 100-step run. `solver.run()` refreshes
+        # `last_result` every step, so this is a true per-step history.
+
+        result = solver.last_result
+        force_time.append([result.interaction_force_magnitude[i] for i in range(len(result.interaction_bodies))])
 
     solver.force_time = force_time
     solver.urf_history = urf_history
