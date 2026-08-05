@@ -2,7 +2,7 @@
 
 **Branch:** `restructure/bc-hierarchy` (off `main`, nothing pushed)
 **Base:** `6e5dd23` (Baraa's partial restructure)
-**Dates:** 2026-08-03 / 2026-08-04
+**Dates:** 2026-08-03 → 2026-08-05
 
 Everything below was verified against the code, not taken from the brief. Where I found
 the brief or the notes to be wrong about the current state, that is called out
@@ -21,6 +21,8 @@ explicitly.
 | `d455f26` | Restore every load type; add `Problem` convenience helpers (§6.2, §6.5) |
 | `72e1c78` | Report update |
 | `046dbf4` | **CRA and RBE now apply loads** (§12) |
+| `fc6c828` | Report update |
+| `ff128c0` | LMGC90 force history decoupled from `verbose` (§11.6) |
 
 Plus one commit in a second repository — see §12:
 
@@ -30,7 +32,7 @@ Plus one commit in a second repository — see §12:
 
 **Two things to read first if time is short:** §12 (CRA and RBE now apply loads — this
 closes the branch's one real correctness hole, and needs a decision about upstreaming)
-and §11 (five bugs that were already on `main` and blocked every solver from running
+and §11 (six bugs that were already on `main` and blocked every solver from running
 outside Rhino).
 
 ---
@@ -58,9 +60,9 @@ Two things turned up that were **not** in the brief and are more serious than AP
    remain structurally impossible there and are refused explicitly.
 2. **`bc.g` was a lie** — no solver ever read it (§5.2).
 
-And separately, **five environment/compatibility bugs already on `main`** meant no solver
+And separately, **six environment/compatibility bugs already on `main`** meant no solver
 could run from an example script outside Rhino at all (§11). Each masked the next; all
-five are fixed and verified.
+six are fixed and verified.
 
 ---
 
@@ -699,7 +701,7 @@ has not been true since `Results` became standalone.
 
 ---
 
-## 11. Five bugs already on `main` that stopped the solvers running *(2026-08-04)*
+## 11. Six bugs already on `main`, none from the restructure *(2026-08-04/05)*
 
 None of these came from the restructure. All five were present on `main`, and each was
 hidden by the one before it — they surfaced one at a time as each was cleared. Together
@@ -818,6 +820,54 @@ polygons directly, so the Brep round-trip bought nothing. Both call sites now pa
 polygon (`8b73d4c`) — works in Rhino and standalone, and avoids adding OCC as a dependency
 just to shade a contact face.
 
+### 11.6 LMGC90 force history was coupled to the verbosity setting *(2026-08-05)*
+
+Found and fixed by Daniele. Two defects from one line, both pre-existing on `main`.
+
+`lmgc90_solve` used the `verbose` interval as the modulus for **two unrelated things**:
+printing progress, and sampling `force_time` — the per-step contact force history that
+ends up in `results.metadata["force_time"]`.
+
+```python
+elif step % verbose == 0:            # progress print
+    print(f"Completed step {step}/{n_steps}...")
+
+if step % verbose == 0:              # force history sampling -- same modulus
+    result = solver.last_result
+    force_time.append([...])
+```
+
+Consequences, depending on which default reached it:
+
+| `verbose` | Source | Effect |
+|---|---|---|
+| `0` | `lmgc90_solve`'s own default; what the Rhino plugin sends for "Quiet" | **`ZeroDivisionError` on step 0**, before anything was solved |
+| `1000` | `Solver.LMGC90`'s default | force history silently recorded **1 sample for a 100-step run** |
+
+So asking for a quiet solve crashed, and the normal path produced a "history" with a
+single entry — while `urf_history` beside it was recorded every step, making the two
+metadata series incomparable.
+
+**Fix.** Guard the print against a zero interval, and decouple the sampling entirely:
+
+```python
+elif verbose and step % verbose == 0:
+    print(f"Completed step {step}/{n_steps}...")
+
+# force_time is result data, not logging
+result = solver.last_result
+force_time.append([...])
+```
+
+`solver.run()` refreshes `last_result` every step, so this is now a true per-step history.
+Verified: a 20-step run with `verbose=1000` yields **20 samples**, against 1 before.
+
+**Discussion point.** The two defaults still disagree — `lmgc90_solve(verbose=0)` versus
+`Solver.LMGC90(verbose=1000)`. Since `Problem.solve()` filters out only `None`, the
+`Solver.LMGC90` value always wins in practice and the function's own default is
+unreachable through the normal path. Worth aligning them, and worth asking whether
+`verbose` should be a boolean plus a separate interval.
+
 ### Summary for the meeting
 
 | # | Bug | Origin | Fixed in |
@@ -827,6 +877,7 @@ just to shade a contact face.
 | 11.3 | `ipopt ==3.14.9` pin ships no executable | pre-existing | `dff10ea` |
 | 11.4 | LMGC90 constructor signature | pre-existing | `db880ab` |
 | 11.5 | Viewer needs a Brep backend | pre-existing | `8b73d4c` |
+| 11.6 | LMGC90 force history tied to `verbose`; crash at `verbose=0` | pre-existing | `ff128c0` |
 
 All five verified fixed: CRA, RBE and LMGC90 each solve a real arch, and `add_solution`
 runs without a Brep backend.
