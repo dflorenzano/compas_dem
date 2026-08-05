@@ -703,7 +703,7 @@ has not been true since `Results` became standalone.
 
 ## 11. Six bugs already on `main`, none from the restructure *(2026-08-04/05)*
 
-None of these came from the restructure. All five were present on `main`, and each was
+None of these came from the restructure. All six were present on `main`, and each was
 hidden by the one before it — they surfaced one at a time as each was cleared. Together
 they meant **no solver could run from an example script outside Rhino**.
 
@@ -777,7 +777,7 @@ every fresh environment silently gets 0.4.0 otherwise.
 
 Covered in full at §5.4: `environment.yml` pinned `ipopt ==3.14.9`, a conda-forge
 build that ships the library without the `ipopt` binary pyomo shells out to. Listed
-here because it belongs to the same chain — it was the first of the five to surface.
+here because it belongs to the same chain — it was the first of the six to surface.
 
 ### 11.4 LMGC90 broken against `compas_lmgc90` 0.1.9
 
@@ -879,7 +879,7 @@ unreachable through the normal path. Worth aligning them, and worth asking wheth
 | 11.5 | Viewer needs a Brep backend | pre-existing | `8b73d4c` |
 | 11.6 | LMGC90 force history tied to `verbose`; crash at `verbose=0` | pre-existing | `ff128c0` |
 
-All five verified fixed: CRA, RBE and LMGC90 each solve a real arch, and `add_solution`
+All six verified fixed: CRA, RBE and LMGC90 each solve a real arch, and `add_solution`
 runs without a Brep backend.
 
 ---
